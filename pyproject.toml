@@ -1,0 +1,70 @@
+[project]
+name = "manul"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Tomoya Sawada", email = "stomoya0110@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.maturin]
+module-name = "manul._manul._manul"
+manifest-path = "crates/manul_pyo3/Cargo.toml"
+python-packages = ["manul"]
+python-source = "src"
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "crates/**/*.rs" }, { file = "crates/**/Cargo.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }]
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403", "F405"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "E",
+    "F",
+    "C4",
+    "SIM",
+    "W",
+    "NPY",
+    "PIE",
+    "PL",
+    "PYI",
+    "RUF",
+    "TRY",
+    "D",
+    "D401",
+    "D413",
+]
+ignore = [
+    "C408",    # dict() statement. I like dict().
+    "PLR0911", # Too many return.
+    "PLR0912", # Too many branches.
+    "PLR0913", # Too many args.
+    "TRY002",  # Create Exception class.
+    "TRY003",  # Long message outside exception class.
+    "NPY002",  # numpy.random.Generator. Most torch programs use np.random.seed().
+    "PLR0402", # import torch.nn as nn -> from torch import nn.
+    "SIM108",  # if: a=...; else: a=... -> a = ... if else ...;. I like using if-else in some cases.
+    "B905",    # assert ... in ... -> if ... not in ...: raise AssertionError(...). I like using assert in some cases.
+    "PYI021",  # docstring in .pyi.
+]
+
+[tool.ruff.format]
+quote-style = "single"
