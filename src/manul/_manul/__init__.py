@@ -1,1 +1,1 @@
-from ._manul import manul_core, manul_logger  # ty: ignore[unresolved-import]
+from manul._manul._manul import _core, _logger  # ty: ignore[unresolved-import]

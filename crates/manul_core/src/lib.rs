@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
 
-#[pymodule]
+#[pymodule(name = "_core")]
 pub mod manul_core {
 
     #[allow(non_upper_case_globals)]

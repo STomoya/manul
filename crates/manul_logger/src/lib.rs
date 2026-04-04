@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 
 mod logger;
 
-#[pymodule]
+#[pymodule(name = "_logger")]
 pub mod manul_logger {
 
     #[allow(non_upper_case_globals)]
@@ -11,7 +11,7 @@ pub mod manul_logger {
 
     #[pymodule_export]
     pub use super::logger::{
-        _log_sink, PyLayerConfig, PyLayerDestination, PyLogFormat, debug, error, info,
-        init_tracing, trace, warn,
+        _log_sink, PyLayerConfig, PyLayerDestination, PyLogFormat, PyTracingGuard, debug, error,
+        info, init_tracing, trace, warn,
     };
 }
