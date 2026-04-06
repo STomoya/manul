@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.maturin]
-module-name = "manul._manul._manul"
+module-name = "manul._manul"
 manifest-path = "crates/manul_pyo3/Cargo.toml"
 python-packages = ["manul"]
 python-source = "src"

@@ -29,6 +29,22 @@ impl PyLogFormat {
     fn new(value: &str) -> PyResult<Self> {
         Self::from_str(value).map_err(|e: String| PyValueError::new_err(e))
     }
+
+    fn __str__(&self) -> String {
+        match self {
+            PyLogFormat::Compact => "compact".to_string(),
+            PyLogFormat::Pretty => "pretty".to_string(),
+            PyLogFormat::Json => "json".to_string(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match self {
+            PyLogFormat::Compact => "<LogFormat.Compact: 'Compact'>".to_string(),
+            PyLogFormat::Pretty => "<LogFormat.Pretty: 'Pretty'>".to_string(),
+            PyLogFormat::Json => "<LogFormat.Json: 'Json'>".to_string(),
+        }
+    }
 }
 
 impl FromStr for PyLogFormat {
@@ -46,10 +62,45 @@ impl FromStr for PyLogFormat {
 
 /// Defines where a layer should write its logs.
 #[pyclass(name = "LayerDestination", from_py_object)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum PyLayerDestination {
+    #[default]
     Console,
     File,
+}
+
+#[pymethods]
+impl PyLayerDestination {
+    #[new]
+    fn new(value: &str) -> PyResult<Self> {
+        Self::from_str(value).map_err(|e: String| PyValueError::new_err(e))
+    }
+
+    fn __str__(&self) -> String {
+        match self {
+            PyLayerDestination::Console => "console".to_string(),
+            PyLayerDestination::File => "file".to_string(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match self {
+            PyLayerDestination::Console => "<LayerDestination.Console: 'Console'>".to_string(),
+            PyLayerDestination::File => "<LayerDestination.File: 'File'>".to_string(),
+        }
+    }
+}
+
+impl FromStr for PyLayerDestination {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "console" => Ok(PyLayerDestination::Console),
+            "file" => Ok(PyLayerDestination::File),
+            _ => Err(format!("Unknown log destination: {}", s)),
+        }
+    }
 }
 
 /// Configuration for a single tracing layer.
@@ -110,6 +161,27 @@ impl PyLayerConfig {
             file_prefix,
             include_span_events,
         }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LayerConfig(name={}, filter_directive={}, format={}, destination={}, file_dir={}, file_prefix={}, include_span_events={})",
+            self.name,
+            self.filter_directive,
+            self.format.__str__(),
+            self.destination.__str__(),
+            if self.file_dir.is_some() {
+                self.file_dir.as_ref().unwrap().to_string()
+            } else {
+                "None".to_string()
+            },
+            if self.file_prefix.is_some() {
+                self.file_prefix.as_ref().unwrap().to_string()
+            } else {
+                "None".to_string()
+            },
+            self.include_span_events
+        )
     }
 }
 
@@ -205,19 +277,21 @@ fn build_fmt_layer(
             .json()
             .flatten_event(true)
             .with_current_span(true)
+            .with_target(false)
             .boxed(),
         PyLogFormat::Pretty => fmt::layer()
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
             .pretty()
+            .with_target(false)
             .boxed(),
         PyLogFormat::Compact => fmt::layer()
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
             .compact()
-            .with_target(true)
+            .with_target(false)
             .boxed(),
     }
 }
