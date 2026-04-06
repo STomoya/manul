@@ -2,6 +2,10 @@
 name = "manul_pyo3"
 version.workspace = true
 edition.workspace = true
+description = "Python export entrypoints for the manul project."
+license-file = "../../LICENSE"
+repository = "https://github.com/STomoya/manul"
+
 
 [lib]
 name = "_manul"

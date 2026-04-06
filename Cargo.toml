@@ -10,6 +10,9 @@ members = [
 name = "manul"
 edition = "2024"
 version = "0.1.0"
+description = "Rust-powered Python utilities."
+license-file = "LICENSE"
+repository = "https://github.com/STomoya/manul"
 
 [workspace.dependencies]
 pyo3 = { version = "0.28.2" }

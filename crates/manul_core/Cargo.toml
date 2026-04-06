@@ -2,6 +2,9 @@
 name = "manul_core"
 version = "0.1.0"
 edition.workspace = true
+description = "Core utilities for the manul project."
+license-file = "../../LICENSE"
+repository = "https://github.com/STomoya/manul"
 
 [dependencies]
 glob = "0.3.3"

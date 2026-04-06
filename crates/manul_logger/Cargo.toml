@@ -2,6 +2,9 @@
 name = "manul_logger"
 version = "0.1.0"
 edition.workspace = true
+description = "Logging utilities for the manul project."
+license-file = "../../LICENSE"
+repository = "https://github.com/STomoya/manul"
 
 [dependencies]
 pyo3 = { workspace = true, features = ["abi3-py311", "extension-module"] }
