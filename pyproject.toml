@@ -22,6 +22,11 @@ cache-keys = [{ file = "pyproject.toml" }, { file = "crates/**/*.rs" }, { file =
 requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
+[dependency-groups]
+dev = [
+    "natsort>=8.4.0",
+]
+
 [tool.ruff]
 line-length = 120
 indent-width = 4

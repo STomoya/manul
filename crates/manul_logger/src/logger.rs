@@ -39,11 +39,8 @@ impl PyLogFormat {
     }
 
     fn __repr__(&self) -> String {
-        match self {
-            PyLogFormat::Compact => "<LogFormat.Compact: 'Compact'>".to_string(),
-            PyLogFormat::Pretty => "<LogFormat.Pretty: 'Pretty'>".to_string(),
-            PyLogFormat::Json => "<LogFormat.Json: 'Json'>".to_string(),
-        }
+        let self_string = self.__str__();
+        format!("<LogFormat.{}: '{}'>", self_string, self_string)
     }
 }
 
@@ -84,10 +81,8 @@ impl PyLayerDestination {
     }
 
     fn __repr__(&self) -> String {
-        match self {
-            PyLayerDestination::Console => "<LayerDestination.Console: 'Console'>".to_string(),
-            PyLayerDestination::File => "<LayerDestination.File: 'File'>".to_string(),
-        }
+        let self_string = self.__str__();
+        format!("<LayerDestination.{}: '{}'>", self_string, self_string)
     }
 }
 
