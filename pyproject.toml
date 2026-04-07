@@ -26,6 +26,7 @@ build-backend = "maturin"
 dev = [
     "natsort>=8.4.0",
     "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",
 ]
 
@@ -76,3 +77,15 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "single"
+
+[tool.pytest.ini_options]
+addopts = [
+    "-vv",
+    "-s",
+    "-ra",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=xml:reports/coverage.xml",
+    "--junitxml=reports/pytest.xml"
+]
+testpaths = ["tests"]

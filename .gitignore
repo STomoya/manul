@@ -16,3 +16,6 @@ target/
 # Other files
 logs/
 *.log
+
+reports/
+.coverage
