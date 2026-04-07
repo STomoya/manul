@@ -297,6 +297,7 @@ fn build_fmt_layer(
 ) -> LogLayer {
     match format {
         PyLogFormat::Json => fmt::layer()
+            .with_timer(fmt::time::LocalTime::rfc_3339())
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
@@ -306,6 +307,7 @@ fn build_fmt_layer(
             .with_target(false)
             .boxed(),
         PyLogFormat::Pretty => fmt::layer()
+            .with_timer(fmt::time::LocalTime::rfc_3339())
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
@@ -313,6 +315,7 @@ fn build_fmt_layer(
             .with_target(false)
             .boxed(),
         PyLogFormat::Compact => fmt::layer()
+            .with_timer(fmt::time::LocalTime::rfc_3339())
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
