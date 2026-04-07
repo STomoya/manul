@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Once;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -12,6 +13,8 @@ use tracing_subscriber::{
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
+
+static INIT: Once = Once::new();
 
 /// Defines the output format of the logs.
 #[pyclass(name = "LogFormat", from_py_object)]
@@ -187,38 +190,66 @@ pub struct PyTracingGuard {
     _guards: Vec<WorkerGuard>,
 }
 
+// Boxed layer type
+type LogLayer = Box<dyn Layer<Registry> + Send + Sync>;
+
 /// The main entry point for Python to initialize tracing.
 #[pyfunction]
 #[pyo3(signature = (layers))]
 pub fn init_tracing(layers: Vec<PyLayerConfig>) -> PyResult<PyTracingGuard> {
     // 1. Redirect standard `log` macros to `tracing`.
     // LogTracer::init().map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    if INIT.is_completed() {
+        tracing::warn!(
+            "Tracing has already been initialized. Calling init_tracing multiple times is not supported and may lead to unexpected behavior."
+        );
+        return Ok(PyTracingGuard {
+            _guards: Vec::new(),
+        });
+    }
 
     let mut guards = Vec::new();
-    let mut subscriber_layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = Vec::new();
+    let mut subscriber_layers: Vec<LogLayer> = Vec::new();
+    let mut initialized_info = Vec::new();
 
     // 2. Build each layer
     for config in layers {
-        let (layer, guard) = build_layer_internal(&config);
+        let (layer, guard) = build_layer_internal(&config).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Failed to initialize layer '{}': {}",
+                config.name, e
+            ))
+        })?;
         subscriber_layers.push(layer);
         if let Some(g) = guard {
             guards.push(g);
         }
+        initialized_info.push((config.name.clone(), config.filter_directive.clone()));
     }
 
-    // 3. Initialize Registry
-    Registry::default()
-        .with(subscriber_layers)
-        .try_init()
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    // Use Once to ensure the global state is set exactly once
+    // This is thread-safe and more idiomatic for global state
+    let mut init_err = None;
+    INIT.call_once(|| {
+        if let Err(e) = Registry::default().with(subscriber_layers).try_init() {
+            init_err = Some(e.to_string());
+        }
+    });
+
+    if let Some(err_msg) = init_err {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(err_msg));
+    }
+
+    // Success log
+    for (name, filter) in initialized_info {
+        tracing::debug!(layer_name = %name, filter = %filter, "Tracing layer successfully attached.");
+    }
 
     Ok(PyTracingGuard { _guards: guards })
 }
 
 /// Helper to build a single layer based on configuration.
-fn build_layer_internal(
-    config: &PyLayerConfig,
-) -> (Box<dyn Layer<Registry> + Send + Sync>, Option<WorkerGuard>) {
+fn build_layer_internal(config: &PyLayerConfig) -> Result<(LogLayer, Option<WorkerGuard>), String> {
     let env_filter = EnvFilter::new(&config.filter_directive);
     let span_events = if config.include_span_events {
         FmtSpan::CLOSE
@@ -232,7 +263,7 @@ fn build_layer_internal(
             let layer = build_fmt_layer(writer, config.format, span_events, true)
                 .with_filter(env_filter)
                 .boxed();
-            (layer, None)
+            Ok((layer, None))
         }
         PyLayerDestination::File => {
             let dir = config
@@ -251,7 +282,7 @@ fn build_layer_internal(
             let layer = build_fmt_layer(writer, config.format, span_events, false)
                 .with_filter(env_filter)
                 .boxed();
-            (layer, Some(guard))
+            Ok((layer, Some(guard)))
         }
     }
 }
@@ -263,7 +294,7 @@ fn build_fmt_layer(
     format: PyLogFormat,
     span_events: FmtSpan,
     ansi: bool,
-) -> Box<dyn Layer<Registry> + Send + Sync> {
+) -> LogLayer {
     match format {
         PyLogFormat::Json => fmt::layer()
             .with_writer(writer)
