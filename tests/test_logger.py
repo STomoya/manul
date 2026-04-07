@@ -176,14 +176,9 @@ class TestLogFunctions:
 class TestTracingHandler:
     """Tests for the TracingHandler class."""
 
-    def test_emit(self, mocker: MockerFixture) -> None:
-        """Test the emit method of TracingHandler."""
-        # Mock the rust function.
-        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
-        # Create handler.
-        handler = TracingHandler()
-
-        # Create a log record.
+    @pytest.fixture
+    def mock_record(self) -> logging.LogRecord:
+        """Mock a log record."""
         record = logging.LogRecord(
             name='test_logger',
             level=logging.INFO,
@@ -195,10 +190,20 @@ class TestTracingHandler:
         )
         record.module = 'test'
         record.funcName = 'test_func'
-        record.extra_key = 'extra_value'  # Add an extra field to the record
+        return record
+
+    def test_emit(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
+        """Test the emit method of TracingHandler."""
+        # Mock the rust function.
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+        # Create handler.
+        handler = TracingHandler()
+
+        # Create a log record.
+        mock_record.extra_key = 'extra_value'  # Add an extra field to the record
 
         # Act
-        handler.emit(record)
+        handler.emit(mock_record)
 
         # Assert
         mock_log_sink.assert_called_once_with(
@@ -210,3 +215,47 @@ class TestTracingHandler:
             module_name='test',
             extra={'extra_key': 'extra_value'},
         )
+
+    def test_no_extra(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
+        """Test the emit method of TracingHandler with no extra fields."""
+        # Mock the rust function.
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+        # Create handler.
+        handler = TracingHandler()
+
+        handler.emit(mock_record)
+
+        mock_log_sink.assert_called_once_with(
+            levelno=logging.INFO,
+            message='test log message',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test',
+            extra=None,
+        )
+
+    def test_handle_error(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
+        """Test the handleError method of TracingHandler."""
+        # Mock the rust function.
+        mock_log_sink = mocker.patch(
+            'manul.logger.handler.log_sink', autospec=True, side_effect=Exception('test error')
+        )
+        mock_handle_error = mocker.patch.object(TracingHandler, 'handleError', autospec=True)
+        # Create handler.
+        handler = TracingHandler()
+
+        # Act
+        handler.emit(mock_record)
+
+        # Assert
+        mock_log_sink.assert_called_once_with(
+            levelno=logging.INFO,
+            message='test log message',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test',
+            extra=None,
+        )
+        mock_handle_error.assert_called_once_with(handler, mock_record)
