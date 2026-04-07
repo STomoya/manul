@@ -5,7 +5,7 @@ from logging import Handler
 
 from manul.logger._functions import log_sink
 
-standard_attrs = {
+_STANDARD_ATTRS = {
     'args',
     'asctime',
     'created',
@@ -44,7 +44,7 @@ class TracingHandler(Handler):
         """
         try:
             message = self.format(record)
-            extra_fields = {str(k): str(v) for k, v in record.__dict__.items() if k not in standard_attrs}
+            extra_fields = {str(k): str(v) for k, v in record.__dict__.items() if k not in _STANDARD_ATTRS}
             if not extra_fields:
                 extra_fields = None
 
