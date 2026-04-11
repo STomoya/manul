@@ -10,5 +10,5 @@ pub mod manul_core {
     pub const __version__: &str = env!("CARGO_PKG_VERSION");
 
     #[pymodule_export]
-    pub use super::utils::{PathType, SortStrategy, find_paths};
+    pub use super::utils::{PyPathType, PySortStrategy, find_paths};
 }

@@ -6,39 +6,39 @@ use std::str::FromStr;
 
 /// Define the PathType enum with Python bindings.
 /// This enum allows users to specify whether they want to filter for files, directories, or both when using the find_paths function.
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(name = "PathType", eq, eq_int, from_py_object)]
 #[derive(PartialEq, Clone)]
-pub enum PathType {
+pub enum PyPathType {
     FilesOnly,
     DirectoriesOnly,
     Both,
 }
 
 #[pymethods]
-impl PathType {
+impl PyPathType {
     #[new]
     /// Create a new PathType from a string. The string can be "file", "directory", or "both" (case-insensitive).
     /// # Arguments
     /// * `value` - The string representation of the PathType.
     pub fn new(value: &str) -> PyResult<Self> {
-        PathType::from_str(value).map_err(|e: String| PyValueError::new_err(e))
+        PyPathType::from_str(value).map_err(|e: String| PyValueError::new_err(e))
     }
 
     fn __str__(&self) -> String {
         match self {
-            PathType::FilesOnly => "file".into(),
-            PathType::DirectoriesOnly => "directory".into(),
-            PathType::Both => "both".into(),
+            PyPathType::FilesOnly => "file".into(),
+            PyPathType::DirectoriesOnly => "directory".into(),
+            PyPathType::Both => "both".into(),
         }
     }
 
     fn __repr__(&self) -> String {
         let self_string = self.__str__();
-        format!("<PathType.{}: '{}'>", self_string, self_string)
+        format!("PathType(\"{}\")", self_string)
     }
 }
 
-impl FromStr for PathType {
+impl FromStr for PyPathType {
     type Err = String;
 
     /// Create a new PathType from a string. The string can be "file", "directory", or "both" (case-insensitive).
@@ -48,11 +48,11 @@ impl FromStr for PathType {
     /// This function will return an error if the input string does not match any of the valid
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "file" => Ok(PathType::FilesOnly),
-            "f" => Ok(PathType::FilesOnly),
-            "directory" => Ok(PathType::DirectoriesOnly),
-            "d" => Ok(PathType::DirectoriesOnly),
-            "both" => Ok(PathType::Both),
+            "file" => Ok(PyPathType::FilesOnly),
+            "f" => Ok(PyPathType::FilesOnly),
+            "directory" => Ok(PyPathType::DirectoriesOnly),
+            "d" => Ok(PyPathType::DirectoriesOnly),
+            "both" => Ok(PyPathType::Both),
             _ => Err(format!("Invalid PathType: {}", s)),
         }
     }
@@ -62,9 +62,9 @@ impl FromStr for PathType {
 /// This enum allows users to specify how results should be sorted when using the find_paths function.
 /// # Arguments
 /// * `value` - The string representation of the SortStrategy.
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(name = "SortStrategy", eq, eq_int, from_py_object)]
 #[derive(PartialEq, Clone)]
-pub enum SortStrategy {
+pub enum PySortStrategy {
     // We want to use None but None is a reserved keyword in Python, so we use No instead and map it to "none" in the string representation.
     No,
     Standard,
@@ -72,30 +72,30 @@ pub enum SortStrategy {
 }
 
 #[pymethods]
-impl SortStrategy {
+impl PySortStrategy {
     #[new]
     /// Create a new SortStrategy from a string. The string can be "none", "standard", or "natural" (case-insensitive).
     /// # Arguments
     /// * `value` - The string representation of the SortStrategy.
     pub fn new(value: &str) -> PyResult<Self> {
-        SortStrategy::from_str(value).map_err(|e: String| PyValueError::new_err(e))
+        PySortStrategy::from_str(value).map_err(|e: String| PyValueError::new_err(e))
     }
 
     fn __str__(&self) -> String {
         match self {
-            SortStrategy::No => "none".into(),
-            SortStrategy::Standard => "standard".into(),
-            SortStrategy::Natural => "natural".into(),
+            PySortStrategy::No => "none".into(),
+            PySortStrategy::Standard => "standard".into(),
+            PySortStrategy::Natural => "natural".into(),
         }
     }
 
     fn __repr__(&self) -> String {
         let self_string = self.__str__();
-        format!("<SortStrategy.{}: '{}'>", self_string, self_string)
+        format!("SortStrategy(\"{}\")", self_string)
     }
 }
 
-impl FromStr for SortStrategy {
+impl FromStr for PySortStrategy {
     type Err = String;
 
     /// Create a new SortStrategy from a string. The string can be "none", "standard", or "natural" (case-insensitive).
@@ -105,9 +105,9 @@ impl FromStr for SortStrategy {
     /// This function will return an error if the input string does not match any of the valid options.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "none" => Ok(SortStrategy::No),
-            "standard" => Ok(SortStrategy::Standard),
-            "natural" => Ok(SortStrategy::Natural),
+            "none" => Ok(PySortStrategy::No),
+            "standard" => Ok(PySortStrategy::Standard),
+            "natural" => Ok(PySortStrategy::Natural),
             _ => Err(format!("Invalid SortStrategy: {}", s)),
         }
     }
@@ -125,12 +125,12 @@ impl FromStr for SortStrategy {
 fn glob_pipeline(
     pattern: &str,
     keyword: Option<&str>,
-    path_type: Option<PathType>,
-    sort_strategy: Option<SortStrategy>,
+    path_type: Option<PyPathType>,
+    sort_strategy: Option<PySortStrategy>,
     include_hidden: bool,
 ) -> Result<Vec<PathBuf>, String> {
-    let target_type = path_type.unwrap_or(PathType::Both);
-    let target_sort = sort_strategy.unwrap_or(SortStrategy::No);
+    let target_type = path_type.unwrap_or(PyPathType::Both);
+    let target_sort = sort_strategy.unwrap_or(PySortStrategy::No);
 
     let options = MatchOptions {
         case_sensitive: true,
@@ -145,8 +145,8 @@ fn glob_pipeline(
         .filter_map(Result::ok)
         .filter(|path| {
             match target_type {
-                PathType::FilesOnly if !path.is_file() => return false,
-                PathType::DirectoriesOnly if !path.is_dir() => return false,
+                PyPathType::FilesOnly if !path.is_file() => return false,
+                PyPathType::DirectoriesOnly if !path.is_dir() => return false,
                 _ => {}
             }
 
@@ -162,15 +162,15 @@ fn glob_pipeline(
         .collect();
 
     match target_sort {
-        SortStrategy::Natural => {
+        PySortStrategy::Natural => {
             results.sort_unstable_by(|a, b| {
                 let a_str = a.to_string_lossy();
                 let b_str = b.to_string_lossy();
                 natord::compare(&a_str, &b_str)
             });
         }
-        SortStrategy::Standard => results.sort_unstable(),
-        SortStrategy::No => {}
+        PySortStrategy::Standard => results.sort_unstable(),
+        PySortStrategy::No => {}
     }
 
     Ok(results)
@@ -189,8 +189,8 @@ fn glob_pipeline(
 pub fn find_paths(
     pattern: &str,
     keyword: Option<&str>,
-    path_type: Option<PathType>,
-    sort_strategy: Option<SortStrategy>,
+    path_type: Option<PyPathType>,
+    sort_strategy: Option<PySortStrategy>,
     include_hidden: bool,
 ) -> PyResult<Vec<String>> {
     // PyO3 automatically converts Vec<String> into a Python list[str]
