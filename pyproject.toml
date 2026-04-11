@@ -1,6 +1,5 @@
 [project]
 name = "manul"
-version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -8,6 +7,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = []
+dynamic = ["version"]
 
 [tool.maturin]
 module-name = "manul._manul"

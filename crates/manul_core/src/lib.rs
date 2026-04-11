@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 
+pub mod funtext;
 mod utils;
 
 #[pymodule(name = "_core")]
