@@ -85,7 +85,7 @@ impl PyLayerDestination {
 
     fn __repr__(&self) -> String {
         let self_string = self.__str__();
-        format!("<LayerDestination.{}: '{}'>", self_string, self_string)
+        format!("LayerDestination(\"{}\")", self_string)
     }
 }
 
