@@ -619,7 +619,7 @@ mod tests {
             "debug".to_string(),
             PyLogFormat::Json,
             PyLayerDestination::File,
-            Some("./test_logs".to_string()),
+            Some("./logs".to_string()),
             Some("test_app".to_string()),
             true,
         );
