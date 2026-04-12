@@ -7,8 +7,11 @@ license-file = "../../LICENSE"
 repository = "https://github.com/STomoya/manul"
 
 [dependencies]
-pyo3 = { workspace = true, features = ["abi3-py311", "extension-module"] }
+pyo3 = { workspace = true, features = ["abi3-py311"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "local-time", "registry"] }
+
+[dev-dependencies]
+tracing-test = "0.2.6"

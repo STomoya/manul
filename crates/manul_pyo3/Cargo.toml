@@ -14,4 +14,4 @@ crate-type = ["cdylib"]
 [dependencies]
 manul_core = { workspace = true }
 manul_logger = { workspace = true }
-pyo3 = { workspace = true, features = ["abi3-py311", "extension-module"] }
+pyo3 = { workspace = true, features = ["abi3-py311"] }
