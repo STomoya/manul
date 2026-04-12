@@ -26,3 +26,26 @@ pub fn build_logo(submodules: Vec<(&str, &str)>) -> (String, String) {
 
     (logo, header_text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_logo_empty_submodules() {
+        let (logo, header) = build_logo(vec![]);
+
+        assert_eq!(logo, format!("{}\n", header));
+    }
+
+    #[test]
+    fn test_build_logo_with_submodules() {
+        let submodules = vec![("core", "1.0.0"), ("logger", "2.1.0")];
+        let (logo, header) = build_logo(submodules);
+
+        assert!(logo.starts_with(&header));
+
+        let details = logo.strip_prefix(&format!("{}\n", header)).unwrap();
+        assert_eq!(details, "core v1.0.0, logger v2.1.0");
+    }
+}
