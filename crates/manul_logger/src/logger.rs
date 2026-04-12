@@ -29,7 +29,7 @@ pub enum PyLogFormat {
 #[pymethods]
 impl PyLogFormat {
     #[new]
-    fn new(value: &str) -> PyResult<Self> {
+    fn py_new(value: &str) -> PyResult<Self> {
         Self::from_str(value).map_err(|e: String| PyValueError::new_err(e))
     }
 
@@ -72,7 +72,7 @@ pub enum PyLayerDestination {
 #[pymethods]
 impl PyLayerDestination {
     #[new]
-    fn new(value: &str) -> PyResult<Self> {
+    fn py_new(value: &str) -> PyResult<Self> {
         Self::from_str(value).map_err(|e: String| PyValueError::new_err(e))
     }
 
@@ -168,13 +168,13 @@ impl PyLayerConfig {
             self.filter_directive,
             self.format.__str__(),
             self.destination.__str__(),
-            if self.file_dir.is_some() {
-                self.file_dir.as_ref().unwrap().to_string()
+            if let Some(dir) = &self.file_dir {
+                dir.to_string()
             } else {
                 "None".to_string()
             },
-            if self.file_prefix.is_some() {
-                self.file_prefix.as_ref().unwrap().to_string()
+            if let Some(prefix) = &self.file_prefix {
+                prefix.to_string()
             } else {
                 "None".to_string()
             },
@@ -193,6 +193,9 @@ pub struct PyTracingGuard {
 // Boxed layer type
 type LogLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
+// HELPME: This function is not tested because it is not possible to initialize tracing multiple times.
+//         Though testing on the python side _is_ possible, we still have a problem on multiple inits...
+// NOTE: Keeping the coverage(off) attr disabled until it gets stable.
 /// The main entry point for Python to initialize tracing.
 #[pyfunction]
 #[pyo3(signature = (layers))]
@@ -441,4 +444,433 @@ pub fn _log_sink(
     };
 
     dispatch_log!(levelno, message, location_str, extra_str);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::Python;
+    use pyo3::types::PyDict;
+    use tracing_test::traced_test;
+
+    #[test]
+    fn test_log_format_from_str() {
+        assert_eq!(
+            PyLogFormat::from_str("compact").unwrap(),
+            PyLogFormat::Compact
+        );
+        assert_eq!(
+            PyLogFormat::from_str("pretty").unwrap(),
+            PyLogFormat::Pretty
+        );
+        assert_eq!(PyLogFormat::from_str("json").unwrap(), PyLogFormat::Json);
+        assert_eq!(PyLogFormat::from_str("JSON").unwrap(), PyLogFormat::Json);
+        assert!(PyLogFormat::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn test_log_format_new() {
+        assert_eq!(
+            PyLogFormat::py_new("compact").unwrap(),
+            PyLogFormat::Compact
+        );
+        assert!(PyLogFormat::py_new("unknown").is_err());
+    }
+
+    #[test]
+    fn test_log_format_str_repr() {
+        let format = PyLogFormat::Json;
+        assert_eq!(format.__str__(), "json");
+        assert_eq!(format.__repr__(), "<LogFormat.json: 'json'>");
+    }
+
+    #[test]
+    fn test_layer_destination_from_str() {
+        assert_eq!(
+            PyLayerDestination::from_str("console").unwrap(),
+            PyLayerDestination::Console
+        );
+        assert_eq!(
+            PyLayerDestination::from_str("file").unwrap(),
+            PyLayerDestination::File
+        );
+        assert_eq!(
+            PyLayerDestination::from_str("FILE").unwrap(),
+            PyLayerDestination::File
+        );
+        assert!(PyLayerDestination::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn test_layer_destination_new() {
+        assert_eq!(
+            PyLayerDestination::py_new("console").unwrap(),
+            PyLayerDestination::Console
+        );
+        assert!(PyLayerDestination::py_new("unknown").is_err());
+    }
+
+    #[test]
+    fn test_layer_destination_str_repr() {
+        let dest = PyLayerDestination::File;
+        assert_eq!(dest.__str__(), "file");
+        assert_eq!(dest.__repr__(), "LayerDestination(\"file\")");
+    }
+
+    #[test]
+    fn test_layer_config_repr() {
+        let config = PyLayerConfig::py_new(
+            "test_layer".to_string(),
+            "info".to_string(),
+            PyLogFormat::Compact,
+            PyLayerDestination::Console,
+            None,
+            None,
+            false,
+        );
+        let repr = config.__repr__();
+        assert_eq!(
+            repr,
+            "LayerConfig(name=test_layer, filter_directive=info, format=compact, destination=console, file_dir=None, file_prefix=None, include_span_events=false)"
+        );
+
+        let config2 = PyLayerConfig::py_new(
+            "test_layer".to_string(),
+            "info".to_string(),
+            PyLogFormat::Json,
+            PyLayerDestination::File,
+            Some("/tmp".to_string()),
+            Some("app.log".to_string()),
+            true,
+        );
+        let repr2 = config2.__repr__();
+        assert_eq!(
+            repr2,
+            "LayerConfig(name=test_layer, filter_directive=info, format=json, destination=file, file_dir=/tmp, file_prefix=app.log, include_span_events=true)"
+        );
+    }
+
+    #[test]
+    fn test_dict_to_string() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("key1", "value1").unwrap();
+            dict.set_item("key2", 42).unwrap();
+            let result = dict_to_string(dict);
+            assert!(result == "key1=value1, key2=42" || result == "key2=42, key1=value1");
+        });
+    }
+
+    #[test]
+    fn test_build_layer_internal_console() {
+        // Compact
+        let config = PyLayerConfig::py_new(
+            "console_layer".to_string(),
+            "info".to_string(),
+            PyLogFormat::Compact,
+            PyLayerDestination::Console,
+            None,
+            None,
+            false,
+        );
+        let result = build_layer_internal(&config);
+        assert!(result.is_ok());
+        let (_layer, guard) = result.unwrap();
+        assert!(guard.is_none());
+
+        // Json
+        let config = PyLayerConfig::py_new(
+            "console_layer".to_string(),
+            "info".to_string(),
+            PyLogFormat::Json,
+            PyLayerDestination::Console,
+            None,
+            None,
+            false,
+        );
+        let result = build_layer_internal(&config);
+        assert!(result.is_ok());
+        let (_layer, guard) = result.unwrap();
+        assert!(guard.is_none());
+
+        // Pretty
+        let config = PyLayerConfig::py_new(
+            "console_layer".to_string(),
+            "info".to_string(),
+            PyLogFormat::Pretty,
+            PyLayerDestination::Console,
+            None,
+            None,
+            false,
+        );
+        let result = build_layer_internal(&config);
+        assert!(result.is_ok());
+        let (_layer, guard) = result.unwrap();
+        assert!(guard.is_none());
+    }
+
+    #[test]
+    fn test_build_layer_internal_file() {
+        // Json
+        // We only test for Json for file dests because format related configuration calls the same function.
+        let config = PyLayerConfig::py_new(
+            "file_layer".to_string(),
+            "debug".to_string(),
+            PyLogFormat::Json,
+            PyLayerDestination::File,
+            Some("./test_logs".to_string()),
+            Some("test_app".to_string()),
+            true,
+        );
+        let result = build_layer_internal(&config);
+        assert!(result.is_ok());
+        let (_layer, guard) = result.unwrap();
+        assert!(guard.is_some()); // File layers yield a non-blocking worker guard
+    }
+
+    /// Create a list of log level and corresponding log names for testing.
+    fn get_log_level_and_names() -> Vec<(u8, String)> {
+        vec![
+            (0, "TRACE".to_string()),
+            (10, "DEBUG".to_string()),
+            (20, "INFO".to_string()),
+            (30, "WARN".to_string()),
+            (40, "ERROR".to_string()),
+        ]
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_sink() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            for (level, name) in get_log_level_and_names() {
+                _log_sink(
+                    level,
+                    "test message",
+                    Some("test.py".to_string()),
+                    Some("test_func".to_string()),
+                    Some(42),
+                    Some("test_module".to_string()),
+                    Some(extra.clone()),
+                );
+
+                assert!(logs_contain(&name));
+                assert!(logs_contain("test message"));
+                assert!(logs_contain("location="));
+                assert!(logs_contain("extra="));
+            }
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_sink_no_filename() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            for (level, name) in get_log_level_and_names() {
+                _log_sink(
+                    level,
+                    "test message",
+                    None,
+                    Some("test_func".to_string()),
+                    Some(42),
+                    Some("test_module".to_string()),
+                    Some(extra.clone()),
+                );
+
+                assert!(logs_contain(&name));
+                assert!(logs_contain("test message"));
+                assert!(logs_contain("location="));
+                assert!(logs_contain("extra="));
+            }
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_sink_no_location() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            for (level, name) in get_log_level_and_names() {
+                _log_sink(
+                    level,
+                    "test message",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(extra.clone()),
+                );
+
+                assert!(logs_contain(&name));
+                assert!(logs_contain("test message"));
+                assert!(!logs_contain("location="));
+                assert!(logs_contain("extra="));
+            }
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_sink_no_extra() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            for (level, name) in get_log_level_and_names() {
+                _log_sink(
+                    level,
+                    "test message",
+                    Some("test.py".to_string()),
+                    Some("test_func".to_string()),
+                    Some(42),
+                    Some("test_module".to_string()),
+                    None,
+                );
+
+                assert!(logs_contain(&name));
+                assert!(logs_contain("test message"));
+                assert!(logs_contain("location="));
+                assert!(!logs_contain("extra="));
+            }
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_log_sink_no_details() {
+        Python::initialize();
+        Python::attach(|_| {
+            for (level, name) in get_log_level_and_names() {
+                _log_sink(level, "test message", None, None, None, None, None);
+
+                assert!(logs_contain(&name));
+                assert!(logs_contain("test message"));
+                assert!(!logs_contain("location="));
+                assert!(!logs_contain("extra="));
+            }
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_trace_direct() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            trace("test message", None);
+
+            // assert basic log outputs
+            assert!(logs_contain("TRACE"));
+            assert!(logs_contain("test message"));
+            assert!(!logs_contain("extra="));
+
+            trace("test message", Some(extra.clone()));
+
+            // assert new log includes extra field
+            assert!(logs_contain("extra="));
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_debug_direct() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            debug("test message", None);
+
+            // assert basic log outputs
+            assert!(logs_contain("DEBUG"));
+            assert!(logs_contain("test message"));
+            assert!(!logs_contain("extra="));
+
+            debug("test message", Some(extra.clone()));
+
+            // assert new log includes extra field
+            assert!(logs_contain("extra="));
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_info_direct() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            info("test message", None);
+
+            // assert basic log outputs
+            assert!(logs_contain("INFO"));
+            assert!(logs_contain("test message"));
+            assert!(!logs_contain("extra="));
+
+            info("test message", Some(extra.clone()));
+
+            // assert new log includes extra field
+            assert!(logs_contain("extra="));
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_warn_direct() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            warn("test message", None);
+
+            // assert basic log outputs
+            assert!(logs_contain("WARN"));
+            assert!(logs_contain("test message"));
+            assert!(!logs_contain("extra="));
+
+            warn("test message", Some(extra.clone()));
+
+            // assert new log includes extra field
+            assert!(logs_contain("extra="));
+        });
+    }
+
+    #[test]
+    #[traced_test]
+    fn test_error_direct() {
+        Python::initialize();
+        Python::attach(|py| {
+            let extra = PyDict::new(py);
+            extra.set_item("test", "data").unwrap();
+
+            error("test message", None);
+
+            // assert basic log outputs
+            assert!(logs_contain("ERROR"));
+            assert!(logs_contain("test message"));
+            assert!(!logs_contain("extra="));
+
+            error("test message", Some(extra.clone()));
+
+            // assert new log includes extra field
+            assert!(logs_contain("extra="));
+        });
+    }
 }
