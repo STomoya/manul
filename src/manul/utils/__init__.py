@@ -29,3 +29,28 @@ def find_paths(
         sort_strategy=sort_strategy_enum,
         include_hidden=include_hidden,
     )
+
+
+def find_all_offsets(text: str, pattern: str) -> list[tuple[int, int]]:
+    """Find all offsets of a pattern in a text."""
+    return _core.find_all_offsets(text=text, pattern=pattern)
+
+
+def match_any(text: str, patterns: list[str]) -> list[int]:
+    """Match any of a list of patterns in a text."""
+    return _core.match_any(text=text, patterns=patterns)
+
+
+def replace_many(text: str, replacements: dict[str, str]) -> str:
+    """Replace many patterns in a text with their corresponding replacements."""
+    return _core.replace_many(text=text, replacements=replacements)
+
+
+def sub_optimized(text: str, pattern: str, replacement: str) -> str:
+    """Replace texts that match the regex pattern with the replacement."""
+    return _core.sub_optimized(text=text, pattern=pattern, replacement=replacement)
+
+
+def extract_structured(text: str, pattern: str) -> list[dict[str, str]]:
+    """Extract named groups from a text that match the regex pattern."""
+    return _core.extract_structured(text=text, pattern=pattern)
