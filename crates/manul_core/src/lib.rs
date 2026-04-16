@@ -12,4 +12,9 @@ pub mod manul_core {
 
     #[pymodule_export]
     pub use super::utils::{PyPathType, PySortStrategy, find_paths};
+
+    #[pymodule_export]
+    pub use super::utils::{
+        extract_structured, find_all_offsets, match_any, replace_many, sub_optimized,
+    };
 }
