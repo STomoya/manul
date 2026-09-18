@@ -22,6 +22,13 @@ thread_local! {
     /// dispatched, so `AttributeInjectingWriter` can merge it into JSON output without
     /// routing it through `tracing`'s static field system (see `log_sink`).
     static CURRENT_ATTRIBUTES: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+
+    /// Holds the current span-stack payload for the log call currently being
+    /// dispatched, mirroring `CURRENT_ATTRIBUTES`. Spans are tracked entirely on the
+    /// Python side (a `contextvars.ContextVar` stack), not via `tracing`'s own
+    /// (OS-thread-local) span registry, so they stay correctly scoped across asyncio
+    /// `await` points.
+    static CURRENT_SPANS: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
 }
 
 /// A `MakeWriter` that wraps another one, splicing `CURRENT_ATTRIBUTES` into each
@@ -64,16 +71,26 @@ impl<W: io::Write> io::Write for AttributeInjectingWriter<W> {
     }
 }
 
-/// Merges the pending `CURRENT_ATTRIBUTES` value into a formatted JSON log line,
-/// dropping the stringified `extra` field in favor of a typed `attributes` field.
-/// Returns `None` (leaving `buf` untouched) when there's nothing pending, or `buf`
-/// isn't a JSON object (e.g. it's the bare `\n` `fmt` sometimes writes separately).
+/// Merges the pending `CURRENT_ATTRIBUTES`/`CURRENT_SPANS` values into a formatted
+/// JSON log line, replacing their stringified fields with typed ones (`extra` ->
+/// `attributes`; `spans` is overwritten in place). Returns `None` (leaving `buf`
+/// untouched) when there's nothing pending, or `buf` isn't a JSON object (e.g. it's
+/// the bare `\n` `fmt` sometimes writes separately).
 fn inject_attributes(buf: &[u8]) -> Option<Vec<u8>> {
-    let attributes = CURRENT_ATTRIBUTES.with(|cell| cell.borrow().clone())?;
+    let attributes = CURRENT_ATTRIBUTES.with(|cell| cell.borrow().clone());
+    let spans = CURRENT_SPANS.with(|cell| cell.borrow().clone());
+    if attributes.is_none() && spans.is_none() {
+        return None;
+    }
     let mut value: serde_json::Value = serde_json::from_slice(buf).ok()?;
     let object = value.as_object_mut()?;
-    object.remove("extra");
-    object.insert("attributes".to_string(), attributes);
+    if let Some(attributes) = attributes {
+        object.remove("extra");
+        object.insert("attributes".to_string(), attributes);
+    }
+    if let Some(spans) = spans {
+        object.insert("spans".to_string(), spans);
+    }
     let mut out = serde_json::to_vec(&value).ok()?;
     out.push(b'\n');
     Some(out)
@@ -322,14 +339,19 @@ fn build_fmt_layer(
 }
 
 macro_rules! dispatch_log {
-    ($level:expr, $msg:expr, $location:expr, $extra:expr) => {{
+    ($level:expr, $msg:expr, $location:expr, $extra:expr, $spans:expr) => {{
+        // `spans` is `Option<&str>`, which implements `tracing`'s `Value` directly
+        // (`impl<T: Value> Value for Option<T>`, tracing-core's field.rs) -- unlike
+        // `location`/`extra`, it doesn't need a match arm per presence combination.
         macro_rules! emit {
             ($lvl:ident) => {
                 match ($location, $extra) {
-                    (Some(loc), Some(e)) => tracing::$lvl!(location = %loc, extra = %e, "{}", $msg),
-                    (Some(loc), None) => tracing::$lvl!(location = %loc, "{}", $msg),
-                    (None, Some(e)) => tracing::$lvl!(extra = %e, "{}", $msg),
-                    (None, None) => tracing::$lvl!("{}", $msg),
+                    (Some(loc), Some(e)) => {
+                        tracing::$lvl!(location = %loc, extra = %e, spans = $spans, "{}", $msg)
+                    }
+                    (Some(loc), None) => tracing::$lvl!(location = %loc, spans = $spans, "{}", $msg),
+                    (None, Some(e)) => tracing::$lvl!(extra = %e, spans = $spans, "{}", $msg),
+                    (None, None) => tracing::$lvl!(spans = $spans, "{}", $msg),
                 }
             };
         }
@@ -345,8 +367,9 @@ macro_rules! dispatch_log {
 
 /// Dispatches a single log line to `tracing`, given already-formatted metadata.
 ///
-/// `attributes`, when set, is handed to JSON-format layers as a typed nested object
-/// (see `AttributeInjectingWriter`) instead of going through `extra`'s stringified form.
+/// `attributes`/`spans_json`, when set, are handed to JSON-format layers as typed
+/// nested values (see `AttributeInjectingWriter`) instead of going through `extra`'s
+/// and `spans`'s stringified forms.
 // Each argument mirrors one independent field of Python's `LogRecord`; there's no
 // natural subgrouping that wouldn't just be a struct wrapping this same fixed list.
 #[allow(clippy::too_many_arguments)]
@@ -359,6 +382,8 @@ pub fn log_sink(
     module_name: Option<String>,
     extra: Option<&str>,
     attributes: Option<serde_json::Value>,
+    spans: Option<&str>,
+    spans_json: Option<serde_json::Value>,
 ) {
     let location_str = if let Some(ref f) = filename {
         Some(format!(
@@ -382,10 +407,14 @@ pub fn log_sink(
     if attributes.is_some() {
         CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = attributes);
     }
+    if spans_json.is_some() {
+        CURRENT_SPANS.with(|cell| *cell.borrow_mut() = spans_json);
+    }
 
-    dispatch_log!(levelno, message, location_str, extra);
+    dispatch_log!(levelno, message, location_str, extra, spans);
 
     CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
+    CURRENT_SPANS.with(|cell| *cell.borrow_mut() = None);
 }
 
 #[cfg(test)]
@@ -493,6 +522,8 @@ mod tests {
                 Some("test_module".to_string()),
                 Some("test=data"),
                 None,
+                None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -514,6 +545,8 @@ mod tests {
                 Some(42),
                 Some("test_module".to_string()),
                 Some("test=data"),
+                None,
+                None,
                 None,
             );
 
@@ -537,6 +570,8 @@ mod tests {
                 None,
                 Some("test=data"),
                 None,
+                None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -559,6 +594,8 @@ mod tests {
                 Some("test_module".to_string()),
                 None,
                 None,
+                None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -572,7 +609,18 @@ mod tests {
     #[traced_test]
     fn test_log_sink_no_details() {
         for (level, name) in get_log_level_and_names() {
-            log_sink(level, "test message", None, None, None, None, None, None);
+            log_sink(
+                level,
+                "test message",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
 
             assert!(logs_contain(&name));
             assert!(logs_contain("test message"));
@@ -669,6 +717,8 @@ mod tests {
             None,
             Some("user_id=42"),
             Some(serde_json::json!({"user_id": 42})),
+            None,
+            None,
         );
 
         let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
@@ -678,5 +728,68 @@ mod tests {
 
         let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
         assert!(compact_output.contains("extra=user_id=42"));
+    }
+
+    #[test]
+    fn test_json_layer_emits_typed_spans_and_compact_layer_gets_text() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let json_buf = SharedBuf::default();
+        let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+
+        let compact_buf = SharedBuf::default();
+        let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
+        let compact_layer =
+            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+
+        let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        log_sink(
+            20,
+            "hi",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("request{request_id=42}"),
+            Some(serde_json::json!([{"name": "request", "fields": {"request_id": 42}}])),
+        );
+
+        let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
+        let json_value: serde_json::Value = serde_json::from_str(json_output.trim()).unwrap();
+        assert_eq!(json_value["spans"][0]["name"], "request");
+        assert_eq!(json_value["spans"][0]["fields"]["request_id"], 42);
+
+        // `spans` is recorded as a raw (unwrapped) `Option<&str>` field rather than via
+        // `%` (Display) -- necessary so it's genuinely omitted when `None` rather than
+        // rendered as an empty string (which would leak a bogus `"spans":""` into JSON
+        // output on every span-less log line). The trade-off: `tracing-subscriber`'s
+        // default text visitor debug-quotes raw `&str` fields, unlike `%`-wrapped ones.
+        let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
+        assert!(compact_output.contains(r#"spans="request{request_id=42}""#));
     }
 }

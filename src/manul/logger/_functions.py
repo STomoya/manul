@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import sys
+from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal, Self, TypeVar
 
 from manul._manul import _logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from contextvars import Token
+    from types import TracebackType
 
 _T = TypeVar('_T')
 
@@ -84,6 +88,83 @@ def init_tracing(layers: list[_logger.LayerConfig]) -> _logger.TracingGuard:
     return _logger.init_tracing(layers)
 
 
+@dataclass(frozen=True, slots=True)
+class _SpanFrame:
+    """One entry in the current span stack."""
+
+    name: str
+    fields: dict
+
+
+# Tracked via a ContextVar rather than a real tracing span: tracing's own span stack
+# is an OS-thread-local, so holding one across an `await` would leak into whichever
+# unrelated coroutine the event loop happens to interleave on the same thread. A
+# ContextVar is copied per-asyncio.Task and correctly restored across await points,
+# and is also correctly isolated per-thread for plain sync code.
+_current_spans: ContextVar[tuple[_SpanFrame, ...]] = ContextVar('_current_spans', default=())
+
+
+class SpanContext:
+    """A tracing span, usable as a sync or async context manager.
+
+    See `_current_spans` for why this doesn't use a real `tracing` span.
+    """
+
+    __slots__ = ('_frame', '_token')
+
+    _token: Token[tuple[_SpanFrame, ...]]
+
+    def __init__(self, name: str, fields: dict) -> None:
+        self._frame = _SpanFrame(name, fields)
+
+    def __enter__(self) -> Self:
+        self._token = _current_spans.set((*_current_spans.get(), self._frame))
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _current_spans.reset(self._token)
+
+    async def __aenter__(self) -> Self:
+        return self.__enter__()
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.__exit__(exc_type, exc_value, traceback)
+
+
+def span(name: str, **fields: object) -> SpanContext:
+    """Open a span, attaching `fields` to every log made while it's open.
+
+    Works as both `with span(...):` and `async with span(...):`.
+
+    Args:
+        name (str): The span's name.
+        **fields: Arbitrary key/value data attached to the span.
+
+    Returns:
+        SpanContext: The span, as a context manager.
+
+    """
+    return SpanContext(name, fields)
+
+
+def _current_spans_payload() -> list[dict] | None:
+    """Build the `spans` payload for `_logger._log_sink` from the active span stack."""
+    frames = _current_spans.get()
+    if not frames:
+        return None
+    return [{'name': frame.name, 'fields': frame.fields} for frame in frames]
+
+
 # Mirrors the levelno values manul_pyo3's log_sink dispatches on.
 _LEVELS = {'trace': 0, 'debug': 10, 'info': 20, 'warn': 30, 'error': 40}
 
@@ -100,7 +181,7 @@ def _log(level: str, message: str, extra: dict | None) -> None:
     # Frame 0 is this function, frame 1 is the public trace/debug/info/warn/error
     # wrapper, frame 2 is their caller -- the callsite we want to report.
     frame = sys._getframe(2)
-    _logger._log_sink(
+    log_sink(
         levelno=_LEVELS[level],
         message=message,
         filename=frame.f_code.co_filename,
@@ -165,4 +246,5 @@ def log_sink(
         lineno=lineno,
         module_name=module_name,
         extra=extra,
+        spans=_current_spans_payload(),
     )

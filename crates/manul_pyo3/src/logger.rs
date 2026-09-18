@@ -227,6 +227,37 @@ fn dict_to_json(extras: &Bound<'_, PyDict>) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
+/// Converts a Python list of `{"name": str, "fields": dict}` span-frame dicts (as
+/// built by `manul.logger._functions._current_spans_payload`) into a human-readable
+/// "name{k=v, ...} > name2{...}" string, for Compact/Pretty formats.
+fn spans_to_string(spans: &Bound<'_, PyList>) -> String {
+    spans
+        .iter()
+        .map(|frame| {
+            let frame = frame
+                .cast::<PyDict>()
+                .expect("span frame must be a dict, see _current_spans_payload");
+            let name: String = frame
+                .get_item("name")
+                .expect("span frame must have a 'name' key")
+                .expect("span frame must have a 'name' key")
+                .extract()
+                .expect("span frame 'name' must be a str");
+            let fields = frame
+                .get_item("fields")
+                .expect("span frame must have a 'fields' key")
+                .and_then(|f| f.cast_into::<PyDict>().ok());
+            match fields {
+                Some(fields) if !fields.is_empty() => {
+                    format!("{}{{{}}}", name, dict_to_string(&fields))
+                }
+                _ => name,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
 /// Converts a single Python value into a `serde_json::Value`, recursing into lists and
 /// dicts. Anything not natively JSON-representable falls back to its `str()` form.
 fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
@@ -250,7 +281,8 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
 }
 
 #[pyfunction(name = "_log_sink")]
-#[pyo3(signature = (levelno, message, filename=None, func_name=None, lineno=None, module_name=None, extra=None))]
+#[pyo3(signature = (levelno, message, filename=None, func_name=None, lineno=None, module_name=None, extra=None, spans=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn _log_sink(
     levelno: u8,
     message: &str,
@@ -259,9 +291,12 @@ pub fn _log_sink(
     lineno: Option<usize>,
     module_name: Option<String>,
     extra: Option<Bound<'_, PyDict>>,
+    spans: Option<Bound<'_, PyList>>,
 ) {
     let extra_str = extra.as_ref().map(dict_to_string);
     let attributes = extra.as_ref().map(dict_to_json);
+    let spans_str = spans.as_ref().map(spans_to_string);
+    let spans_json = spans.as_ref().map(|s| py_to_json(s.as_any()));
     log_sink(
         levelno,
         message,
@@ -271,6 +306,8 @@ pub fn _log_sink(
         module_name,
         extra_str.as_deref(),
         attributes,
+        spans_str.as_deref(),
+        spans_json,
     );
 }
 
@@ -408,7 +445,41 @@ mod tests {
         Python::attach(|py| {
             let extra = PyDict::new(py);
             extra.set_item("k", "v").unwrap();
-            _log_sink(20, "hello", None, None, None, None, Some(extra));
+            _log_sink(20, "hello", None, None, None, None, Some(extra), None);
+        });
+    }
+
+    #[test]
+    fn test_spans_to_string_formats_frames_with_and_without_fields() {
+        Python::initialize();
+        Python::attach(|py| {
+            let with_fields = PyDict::new(py);
+            with_fields.set_item("name", "request").unwrap();
+            let fields = PyDict::new(py);
+            fields.set_item("request_id", 42).unwrap();
+            with_fields.set_item("fields", &fields).unwrap();
+
+            let without_fields = PyDict::new(py);
+            without_fields.set_item("name", "outer").unwrap();
+            without_fields.set_item("fields", PyDict::new(py)).unwrap();
+
+            let spans = PyList::new(py, [without_fields, with_fields]).unwrap();
+            assert_eq!(spans_to_string(&spans), "outer > request{request_id=42}");
+        });
+    }
+
+    #[test]
+    fn test_log_sink_wrapper_smoke_with_spans() {
+        Python::initialize();
+        Python::attach(|py| {
+            let frame = PyDict::new(py);
+            frame.set_item("name", "request").unwrap();
+            let fields = PyDict::new(py);
+            fields.set_item("request_id", 42).unwrap();
+            frame.set_item("fields", fields).unwrap();
+            let spans = PyList::new(py, [frame]).unwrap();
+
+            _log_sink(20, "hello", None, None, None, None, None, Some(spans));
         });
     }
 }

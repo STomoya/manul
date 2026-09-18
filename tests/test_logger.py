@@ -6,6 +6,7 @@ Rust calls are mocked to verify that the correct parameters are passed from Pyth
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Literal
 from unittest.mock import ANY
@@ -129,6 +130,7 @@ class TestLogFunctions:
             lineno=ANY,
             module_name='test_logger',
             extra={'key': 'value'},
+            spans=None,
         )
 
     def test_log_sink(self, mock_log_sink: MockType) -> None:
@@ -150,7 +152,85 @@ class TestLogFunctions:
             lineno=10,
             module_name='test_mod',
             extra={'key': 'value'},
+            spans=None,
         )
+
+    def test_log_sink_attaches_current_spans(self, mock_log_sink: MockType) -> None:
+        """Test that log_sink picks up the currently open span stack."""
+        with _functions.span('outer', request_id=1), _functions.span('inner', step='validate'):
+            _functions.info('nested message')
+
+        mock_log_sink.assert_called_once_with(
+            levelno=20,
+            message='nested message',
+            filename=__file__,
+            func_name='test_log_sink_attaches_current_spans',
+            lineno=ANY,
+            module_name='test_logger',
+            extra=None,
+            spans=[
+                {'name': 'outer', 'fields': {'request_id': 1}},
+                {'name': 'inner', 'fields': {'step': 'validate'}},
+            ],
+        )
+
+
+class TestSpan:
+    """Tests for the span context manager."""
+
+    def test_span_is_scoped_to_with_block(self) -> None:
+        """Test that the span stack is empty before, populated during, and empty after."""
+        assert _functions._current_spans_payload() is None
+        with _functions.span('req', request_id=42) as ctx:
+            assert isinstance(ctx, _functions.SpanContext)
+            assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {'request_id': 42}}]
+        assert _functions._current_spans_payload() is None
+
+    def test_span_resets_on_exception(self) -> None:
+        """Test that the span is popped even if the block raises."""
+        error_message = 'boom'
+        with pytest.raises(ValueError, match=error_message), _functions.span('req'):
+            raise ValueError(error_message)
+        assert _functions._current_spans_payload() is None
+
+    def test_nested_spans_stack_in_order(self) -> None:
+        """Test that nested spans append to, rather than replace, the current stack."""
+        with _functions.span('outer', a=1):
+            with _functions.span('inner', b=2):
+                assert _functions._current_spans_payload() == [
+                    {'name': 'outer', 'fields': {'a': 1}},
+                    {'name': 'inner', 'fields': {'b': 2}},
+                ]
+            assert _functions._current_spans_payload() == [{'name': 'outer', 'fields': {'a': 1}}]
+
+    def test_span_works_as_async_context_manager(self) -> None:
+        """Test that `async with` pushes and pops the span like the sync path."""
+
+        async def run() -> None:
+            assert _functions._current_spans_payload() is None
+            async with _functions.span('req', request_id=42) as ctx:
+                assert isinstance(ctx, _functions.SpanContext)
+                assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {'request_id': 42}}]
+            assert _functions._current_spans_payload() is None
+
+        asyncio.run(run())
+
+    def test_span_is_isolated_per_asyncio_task(self) -> None:
+        """Test that concurrent tasks don't see each other's span stacks."""
+        results = {}
+
+        async def worker(name: str, delay: float) -> None:
+            async with _functions.span(name):
+                await asyncio.sleep(delay)
+                results[name] = _functions._current_spans_payload()
+
+        async def run() -> None:
+            await asyncio.gather(worker('first', 0.02), worker('second', 0.0))
+
+        asyncio.run(run())
+
+        assert results['first'] == [{'name': 'first', 'fields': {}}]
+        assert results['second'] == [{'name': 'second', 'fields': {}}]
 
 
 class TestTracingHandler:
