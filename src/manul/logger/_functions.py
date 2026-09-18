@@ -1,8 +1,30 @@
 """Logger."""
 
-from typing import Literal
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 from manul._manul import _logger
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_T = TypeVar('_T')
+
+
+def _resolve_enum(value: str | None, enum_cls: Callable[[str], _T], default: _T) -> _T:
+    """Resolve a string option into a pyo3 enum member, falling back to a default.
+
+    Args:
+        value (str | None): The raw string option, or None to use the default.
+        enum_cls (Callable[[str], _T]): The pyo3 enum class to construct from `value`.
+        default (_T): The enum member to use when `value` is None.
+
+    Returns:
+        _T: The resolved enum member.
+
+    """
+    return enum_cls(value.lower()) if value is not None else default
 
 
 def build_layer_config(
@@ -33,17 +55,8 @@ def build_layer_config(
         _logger.LayerConfig: The layer configuration.
 
     """
-    if isinstance(format, str):
-        format_enum = format.lower()
-        format_enum = _logger.LogFormat(format_enum)
-    elif format is None:
-        format_enum = _logger.LogFormat.Compact
-
-    if isinstance(destination, str):
-        destination_enum = destination.lower()
-        destination_enum = _logger.LayerDestination(destination_enum)
-    elif destination is None:
-        destination_enum = _logger.LayerDestination.Console
+    format_enum = _resolve_enum(format, _logger.LogFormat, _logger.LogFormat.Compact)
+    destination_enum = _resolve_enum(destination, _logger.LayerDestination, _logger.LayerDestination.Console)
 
     return _logger.LayerConfig(
         name=name,
