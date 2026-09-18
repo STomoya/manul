@@ -4,8 +4,7 @@ use pyo3::exceptions::PyRuntimeError;
 
 // Runs in its own process: install a global subscriber through a path that bypasses
 // `init_tracing`'s internal `Once`, so the underlying `manul_logger::init_tracing` call
-// is guaranteed to return `TracingInitError::RegistryInit`. This is a regression test
-// for the PyValueError/PyRuntimeError distinction the wrapper maps that error to.
+// is guaranteed to fail, and the wrapper must surface that as a `PyRuntimeError`.
 #[test]
 fn test_init_tracing_wrapper_maps_registry_error_to_runtime_error() {
     tracing::subscriber::set_global_default(tracing_subscriber::fmt().finish())

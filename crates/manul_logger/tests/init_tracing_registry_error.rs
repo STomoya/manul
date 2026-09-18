@@ -1,6 +1,4 @@
-use manul_logger::logger::{
-    LayerConfig, LayerDestination, LogFormat, TracingInitError, init_tracing,
-};
+use manul_logger::logger::{LayerConfig, LayerDestination, LogFormat, init_tracing};
 
 // Runs in its own process: install a global subscriber through a path that bypasses
 // `init_tracing`'s internal `Once`, so `Registry::default().try_init()` is guaranteed
@@ -20,6 +18,9 @@ fn test_init_tracing_registry_error() {
         false,
     );
 
-    let result = init_tracing(vec![config]);
-    assert!(matches!(result, Err(TracingInitError::RegistryInit(_))));
+    let err = match init_tracing(vec![config]) {
+        Err(e) => e,
+        Ok(_) => panic!("expected the conflicting subscriber to cause a failure"),
+    };
+    assert!(err.to_string().contains("global default"));
 }

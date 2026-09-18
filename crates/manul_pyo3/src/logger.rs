@@ -206,12 +206,7 @@ pub fn init_tracing(layers: Vec<PyLayerConfig>) -> PyResult<PyTracingGuard> {
     let core_layers: Vec<LayerConfig> = layers.iter().map(LayerConfig::from).collect();
     core_init_tracing(core_layers)
         .map(|guards| PyTracingGuard { _guards: guards })
-        .map_err(|e| match e {
-            manul_logger::logger::TracingInitError::LayerBuild(msg) => PyValueError::new_err(msg),
-            manul_logger::logger::TracingInitError::RegistryInit(msg) => {
-                PyRuntimeError::new_err(msg)
-            }
-        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Converts a Python dictionary into a human-readable string: "key=val, key1=val1"

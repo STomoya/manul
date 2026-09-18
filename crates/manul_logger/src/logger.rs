@@ -111,20 +111,14 @@ pub struct TracingGuards {
     pub guards: Vec<WorkerGuard>,
 }
 
-/// Distinguishes which stage of tracing initialization failed, so callers
-/// (e.g. the pyo3 wrapper) can map each to a different exception type.
+/// Returned when the global tracing subscriber could not be installed, e.g. because
+/// one was already installed elsewhere, bypassing `init_tracing`'s own `Once` guard.
 #[derive(Debug)]
-pub enum TracingInitError {
-    LayerBuild(String),
-    RegistryInit(String),
-}
+pub struct TracingInitError(String);
 
 impl std::fmt::Display for TracingInitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TracingInitError::LayerBuild(msg) => write!(f, "{}", msg),
-            TracingInitError::RegistryInit(msg) => write!(f, "{}", msg),
-        }
+        write!(f, "{}", self.0)
     }
 }
 
@@ -144,12 +138,7 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
     let mut initialized_info = Vec::new();
 
     for config in &layers {
-        let (layer, guard) = build_layer_internal(config).map_err(|e| {
-            TracingInitError::LayerBuild(format!(
-                "Failed to initialize layer '{}': {}",
-                config.name, e
-            ))
-        })?;
+        let (layer, guard) = build_layer_internal(config);
         subscriber_layers.push(layer);
         if let Some(g) = guard {
             guards.push(g);
@@ -165,7 +154,7 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
     });
 
     if let Some(err_msg) = init_err {
-        return Err(TracingInitError::RegistryInit(err_msg));
+        return Err(TracingInitError(err_msg));
     }
 
     for (name, filter) in initialized_info {
@@ -176,7 +165,7 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
 }
 
 /// Builds a single layer based on configuration.
-fn build_layer_internal(config: &LayerConfig) -> Result<(LogLayer, Option<WorkerGuard>), String> {
+fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>) {
     let env_filter = EnvFilter::new(&config.filter_directive);
     let span_events = if config.include_span_events {
         FmtSpan::CLOSE
@@ -190,7 +179,7 @@ fn build_layer_internal(config: &LayerConfig) -> Result<(LogLayer, Option<Worker
             let layer = build_fmt_layer(writer, config.format, span_events, true)
                 .with_filter(env_filter)
                 .boxed();
-            Ok((layer, None))
+            (layer, None)
         }
         LayerDestination::File => {
             let dir = config
@@ -209,7 +198,7 @@ fn build_layer_internal(config: &LayerConfig) -> Result<(LogLayer, Option<Worker
             let layer = build_fmt_layer(writer, config.format, span_events, false)
                 .with_filter(env_filter)
                 .boxed();
-            Ok((layer, Some(guard)))
+            (layer, Some(guard))
         }
     }
 }
@@ -366,14 +355,7 @@ mod tests {
 
     #[test]
     fn test_tracing_init_error_display() {
-        assert_eq!(
-            TracingInitError::LayerBuild("layer boom".to_string()).to_string(),
-            "layer boom"
-        );
-        assert_eq!(
-            TracingInitError::RegistryInit("registry boom".to_string()).to_string(),
-            "registry boom"
-        );
+        assert_eq!(TracingInitError("boom".to_string()).to_string(), "boom");
     }
 
     #[test]
@@ -394,9 +376,7 @@ mod tests {
                 None,
                 false,
             );
-            let result = build_layer_internal(&config);
-            assert!(result.is_ok());
-            let (_layer, guard) = result.unwrap();
+            let (_layer, guard) = build_layer_internal(&config);
             assert!(guard.is_none());
         }
     }
@@ -412,9 +392,7 @@ mod tests {
             Some("test_app".to_string()),
             true,
         );
-        let result = build_layer_internal(&config);
-        assert!(result.is_ok());
-        let (_layer, guard) = result.unwrap();
+        let (_layer, guard) = build_layer_internal(&config);
         assert!(guard.is_some());
     }
 
