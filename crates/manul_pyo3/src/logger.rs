@@ -206,12 +206,7 @@ pub fn init_tracing(layers: Vec<PyLayerConfig>) -> PyResult<PyTracingGuard> {
     let core_layers: Vec<LayerConfig> = layers.iter().map(LayerConfig::from).collect();
     core_init_tracing(core_layers)
         .map(|guards| PyTracingGuard { _guards: guards })
-        .map_err(|e| match e {
-            manul_logger::logger::TracingInitError::LayerBuild(msg) => PyValueError::new_err(msg),
-            manul_logger::logger::TracingInitError::RegistryInit(msg) => {
-                PyRuntimeError::new_err(msg)
-            }
-        })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Converts a Python dictionary into a human-readable string: "key=val, key1=val1"
@@ -294,6 +289,14 @@ mod tests {
         assert_eq!(value.__str__(), "json");
         assert_eq!(value.__repr__(), "<LogFormat.json: 'json'>");
         assert!(PyLogFormat::py_new("bogus").is_err());
+
+        let compact = PyLogFormat::py_new("compact").unwrap();
+        assert_eq!(compact, PyLogFormat::Compact);
+        assert_eq!(compact.__str__(), "compact");
+
+        let pretty = PyLogFormat::py_new("pretty").unwrap();
+        assert_eq!(pretty, PyLogFormat::Pretty);
+        assert_eq!(pretty.__str__(), "pretty");
     }
 
     #[test]
@@ -303,6 +306,10 @@ mod tests {
         assert_eq!(value, PyLayerDestination::File);
         assert_eq!(value.__str__(), "file");
         assert_eq!(value.__repr__(), "LayerDestination(\"file\")");
+
+        let console = PyLayerDestination::py_new("console").unwrap();
+        assert_eq!(console, PyLayerDestination::Console);
+        assert_eq!(console.__str__(), "console");
     }
 
     #[test]
@@ -327,6 +334,23 @@ mod tests {
     }
 
     #[test]
+    fn test_py_layer_config_repr_with_file_settings() {
+        let config = PyLayerConfig::py_new(
+            "file_layer".to_string(),
+            "debug".to_string(),
+            PyLogFormat::Json,
+            PyLayerDestination::File,
+            Some("./logs".to_string()),
+            Some("app".to_string()),
+            true,
+        );
+        assert_eq!(
+            config.__repr__(),
+            "LayerConfig(name=file_layer, filter_directive=debug, format=json, destination=file, file_dir=./logs, file_prefix=app, include_span_events=true)"
+        );
+    }
+
+    #[test]
     fn test_dict_to_string() {
         Python::initialize();
         Python::attach(|py| {
@@ -335,6 +359,22 @@ mod tests {
             let result = dict_to_string(dict);
             assert_eq!(result, "key1=value1");
         });
+    }
+
+    #[test]
+    fn test_init_tracing_wrapper_success() {
+        Python::initialize();
+        let config = PyLayerConfig::py_new(
+            "wrapper_test".to_string(),
+            "off".to_string(),
+            PyLogFormat::Compact,
+            PyLayerDestination::Console,
+            None,
+            None,
+            false,
+        );
+        let result = init_tracing(vec![config]);
+        assert!(result.is_ok());
     }
 
     #[test]

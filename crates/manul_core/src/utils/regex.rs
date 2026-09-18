@@ -105,6 +105,11 @@ mod tests {
     }
 
     #[test]
+    fn test_sub_optimized_invalid_pattern() {
+        assert!(sub_optimized("text", "(unclosed", "x").is_err());
+    }
+
+    #[test]
     fn test_extract_structured() {
         let result = extract_structured("John:25", r"(?P<name>\w+):(?P<age>\d+)").unwrap();
         assert_eq!(result.len(), 1);
@@ -116,5 +121,10 @@ mod tests {
     fn test_extract_structured_no_named_groups() {
         let result = extract_structured("John:25", r"\w+:\d+").unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_structured_invalid_pattern() {
+        assert!(extract_structured("text", "(unclosed").is_err());
     }
 }

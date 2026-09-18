@@ -207,7 +207,39 @@ mod tests {
     #[test]
     fn test_py_path_type_conversions() {
         assert_eq!(PathType::from(PyPathType::FilesOnly), PathType::FilesOnly);
+        assert_eq!(
+            PathType::from(PyPathType::DirectoriesOnly),
+            PathType::DirectoriesOnly
+        );
+        assert_eq!(PathType::from(PyPathType::Both), PathType::Both);
+        assert_eq!(PyPathType::from(PathType::FilesOnly), PyPathType::FilesOnly);
+        assert_eq!(
+            PyPathType::from(PathType::DirectoriesOnly),
+            PyPathType::DirectoriesOnly
+        );
         assert_eq!(PyPathType::from(PathType::Both), PyPathType::Both);
+    }
+
+    #[test]
+    fn test_py_sort_strategy_conversions() {
+        assert_eq!(SortStrategy::from(PySortStrategy::No), SortStrategy::No);
+        assert_eq!(
+            SortStrategy::from(PySortStrategy::Standard),
+            SortStrategy::Standard
+        );
+        assert_eq!(
+            SortStrategy::from(PySortStrategy::Natural),
+            SortStrategy::Natural
+        );
+        assert_eq!(PySortStrategy::from(SortStrategy::No), PySortStrategy::No);
+        assert_eq!(
+            PySortStrategy::from(SortStrategy::Standard),
+            PySortStrategy::Standard
+        );
+        assert_eq!(
+            PySortStrategy::from(SortStrategy::Natural),
+            PySortStrategy::Natural
+        );
     }
 
     #[test]
@@ -267,5 +299,32 @@ mod tests {
             sub_optimized("hello world", "world", "there").unwrap(),
             "hello there"
         );
+    }
+
+    #[test]
+    fn test_replace_many_wrapper() {
+        Python::initialize();
+        Python::attach(|py| {
+            let replacements = PyDict::new(py);
+            replacements.set_item("foo", "baz").unwrap();
+            replacements.set_item("bar", "qux").unwrap();
+            let result = replace_many("foo bar", &replacements).unwrap();
+            assert_eq!(result, "baz qux");
+        });
+    }
+
+    #[test]
+    fn test_extract_structured_wrapper() {
+        Python::initialize();
+        let result = extract_structured("John:25", r"(?P<name>\w+):(?P<age>\d+)").unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].get("name").unwrap(), "John");
+        assert_eq!(result[0].get("age").unwrap(), "25");
+    }
+
+    #[test]
+    fn test_extract_structured_wrapper_invalid_pattern() {
+        Python::initialize();
+        assert!(extract_structured("text", "(unclosed").is_err());
     }
 }
