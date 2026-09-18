@@ -365,6 +365,18 @@ mod tests {
     }
 
     #[test]
+    fn test_tracing_init_error_display() {
+        assert_eq!(
+            TracingInitError::LayerBuild("layer boom".to_string()).to_string(),
+            "layer boom"
+        );
+        assert_eq!(
+            TracingInitError::RegistryInit("registry boom".to_string()).to_string(),
+            "registry boom"
+        );
+    }
+
+    #[test]
     fn test_layer_destination_to_str() {
         assert_eq!(LayerDestination::Console.to_str(), "console");
         assert_eq!(LayerDestination::File.to_str(), "file");

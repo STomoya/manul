@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
-mod core;
-mod logger;
+pub mod core;
+pub mod logger;
 
 /// A Python module implemented in Rust.
 #[pymodule]

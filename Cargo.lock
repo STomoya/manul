@@ -106,6 +106,8 @@ dependencies = [
  "manul_core",
  "manul_logger",
  "pyo3",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
