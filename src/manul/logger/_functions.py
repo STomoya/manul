@@ -1,10 +1,8 @@
 """Logger."""
 
-from typing import Any, Literal, TypeVar
+from typing import Literal
 
-from manul._manul import _logger  # ty: ignore[unresolved-import]
-
-ConfigT = TypeVar('ConfigT', bound=_logger.LayerConfig)
+from manul._manul import _logger
 
 
 def build_layer_config(
@@ -16,7 +14,7 @@ def build_layer_config(
     file_dir: str | None = None,
     file_prefix: str | None = None,
     include_span_events: bool = False,
-) -> ConfigT:
+) -> _logger.LayerConfig:
     """Build a layer configuration.
 
     Args:
@@ -32,7 +30,7 @@ def build_layer_config(
         include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
 
     Returns:
-        ConfigT: The layer configuration.
+        _logger.LayerConfig: The layer configuration.
 
     """
     if isinstance(format, str):
@@ -58,11 +56,11 @@ def build_layer_config(
     )
 
 
-def init_tracing(layers: list[ConfigT]) -> _logger.TracingGuard:
+def init_tracing(layers: list[_logger.LayerConfig]) -> _logger.TracingGuard:
     """Initialize the tracing system.
 
     Args:
-        layers (list[ConfigT]): A list of layer configurations.
+        layers (list[_logger.LayerConfig]): A list of layer configurations.
 
     Returns:
         _logger.TracingGuard:
@@ -71,59 +69,11 @@ def init_tracing(layers: list[ConfigT]) -> _logger.TracingGuard:
     return _logger.init_tracing(layers)
 
 
-def info(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Info level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.info(message=message, extra=extra)
-
-
-def debug(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Debug level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.debug(message=message, extra=extra)
-
-
-def warn(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Warn level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.warn(message=message, extra=extra)
-
-
-def error(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Error level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.error(message=message, extra=extra)
-
-
-def trace(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Trace level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.trace(message=message, extra=extra)
+debug = _logger.debug
+error = _logger.error
+info = _logger.info
+trace = _logger.trace
+warn = _logger.warn
 
 
 def log_sink(

@@ -1,4 +1,5 @@
-from . import _core, _logger
+from . import _core
+from . import _logger as _logger
 
 __logo__: str
 """The logo of the manul_core module."""
