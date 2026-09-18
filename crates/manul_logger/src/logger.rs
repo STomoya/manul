@@ -111,10 +111,27 @@ pub struct TracingGuards {
     pub guards: Vec<WorkerGuard>,
 }
 
+/// Distinguishes which stage of tracing initialization failed, so callers
+/// (e.g. the pyo3 wrapper) can map each to a different exception type.
+#[derive(Debug)]
+pub enum TracingInitError {
+    LayerBuild(String),
+    RegistryInit(String),
+}
+
+impl std::fmt::Display for TracingInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TracingInitError::LayerBuild(msg) => write!(f, "{}", msg),
+            TracingInitError::RegistryInit(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
 type LogLayer = Box<dyn Layer<Registry> + Send + Sync>;
 
 /// The main entry point for initializing tracing.
-pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, String> {
+pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingInitError> {
     if INIT.is_completed() {
         tracing::warn!(
             "Tracing has already been initialized. Calling init_tracing multiple times is not supported and may lead to unexpected behavior."
@@ -127,8 +144,12 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, String> {
     let mut initialized_info = Vec::new();
 
     for config in &layers {
-        let (layer, guard) = build_layer_internal(config)
-            .map_err(|e| format!("Failed to initialize layer '{}': {}", config.name, e))?;
+        let (layer, guard) = build_layer_internal(config).map_err(|e| {
+            TracingInitError::LayerBuild(format!(
+                "Failed to initialize layer '{}': {}",
+                config.name, e
+            ))
+        })?;
         subscriber_layers.push(layer);
         if let Some(g) = guard {
             guards.push(g);
@@ -144,7 +165,7 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, String> {
     });
 
     if let Some(err_msg) = init_err {
-        return Err(err_msg);
+        return Err(TracingInitError::RegistryInit(err_msg));
     }
 
     for (name, filter) in initialized_info {
