@@ -1,6 +1,7 @@
 """Handler."""
 
 import logging
+import traceback
 from logging import Handler
 
 from manul.logger._functions import log_sink
@@ -48,6 +49,16 @@ class TracingHandler(Handler):
             if not extra_fields:
                 extra_fields = None
 
+            exception = None
+            if record.exc_info:
+                exc_type, exc_value, exc_tb = record.exc_info
+                if exc_type is not None:
+                    exception = {
+                        'type': exc_type.__name__,
+                        'message': str(exc_value),
+                        'traceback': ''.join(traceback.format_exception(exc_type, exc_value, exc_tb)),
+                    }
+
             log_sink(
                 levelno=record.levelno,
                 message=message,
@@ -56,6 +67,7 @@ class TracingHandler(Handler):
                 lineno=record.lineno,
                 module_name=record.module,
                 extra=extra_fields,
+                exception=exception,
             )
         except Exception:
             self.handleError(record)

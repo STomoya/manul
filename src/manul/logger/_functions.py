@@ -225,6 +225,7 @@ def log_sink(
     lineno: int,
     module_name: str,
     extra: dict | None = None,
+    exception: dict | None = None,
 ) -> None:
     """Receive log messages from Python and forward them to Rust.
 
@@ -236,6 +237,9 @@ def log_sink(
         lineno (int): The line number.
         module_name (str): The module name.
         extra (dict | None, optional): Extra data to log. Defaults to None.
+        exception (dict | None, optional): `{type, message, traceback}` for the
+            currently-handled exception, e.g. from `logging`'s `exc_info`. Defaults to
+            None.
 
     """
     _logger._log_sink(
@@ -247,4 +251,5 @@ def log_sink(
         module_name=module_name,
         extra=extra,
         spans=_current_spans_payload(),
+        exception=exception,
     )

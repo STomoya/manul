@@ -281,7 +281,7 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
 }
 
 #[pyfunction(name = "_log_sink")]
-#[pyo3(signature = (levelno, message, filename=None, func_name=None, lineno=None, module_name=None, extra=None, spans=None))]
+#[pyo3(signature = (levelno, message, filename=None, func_name=None, lineno=None, module_name=None, extra=None, spans=None, exception=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn _log_sink(
     levelno: u8,
@@ -292,11 +292,13 @@ pub fn _log_sink(
     module_name: Option<String>,
     extra: Option<Bound<'_, PyDict>>,
     spans: Option<Bound<'_, PyList>>,
+    exception: Option<Bound<'_, PyDict>>,
 ) {
     let extra_str = extra.as_ref().map(dict_to_string);
     let attributes = extra.as_ref().map(dict_to_json);
     let spans_str = spans.as_ref().map(spans_to_string);
     let spans_json = spans.as_ref().map(|s| py_to_json(s.as_any()));
+    let exception_json = exception.as_ref().map(dict_to_json);
     log_sink(
         levelno,
         message,
@@ -308,6 +310,7 @@ pub fn _log_sink(
         attributes,
         spans_str.as_deref(),
         spans_json,
+        exception_json,
     );
 }
 
@@ -445,7 +448,7 @@ mod tests {
         Python::attach(|py| {
             let extra = PyDict::new(py);
             extra.set_item("k", "v").unwrap();
-            _log_sink(20, "hello", None, None, None, None, Some(extra), None);
+            _log_sink(20, "hello", None, None, None, None, Some(extra), None, None);
         });
     }
 
@@ -479,7 +482,30 @@ mod tests {
             frame.set_item("fields", fields).unwrap();
             let spans = PyList::new(py, [frame]).unwrap();
 
-            _log_sink(20, "hello", None, None, None, None, None, Some(spans));
+            _log_sink(20, "hello", None, None, None, None, None, Some(spans), None);
+        });
+    }
+
+    #[test]
+    fn test_log_sink_wrapper_smoke_with_exception() {
+        Python::initialize();
+        Python::attach(|py| {
+            let exception = PyDict::new(py);
+            exception.set_item("type", "ValueError").unwrap();
+            exception.set_item("message", "oops").unwrap();
+            exception.set_item("traceback", "Traceback...").unwrap();
+
+            _log_sink(
+                40,
+                "boom",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(exception),
+            );
         });
     }
 }

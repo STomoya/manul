@@ -29,6 +29,11 @@ thread_local! {
     /// (OS-thread-local) span registry, so they stay correctly scoped across asyncio
     /// `await` points.
     static CURRENT_SPANS: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+
+    /// Holds the current `{type, message, traceback}` exception payload, mirroring
+    /// `CURRENT_ATTRIBUTES`. JSON-only: text formats already get the traceback via
+    /// Python's `logging.Formatter.format`, which appends it straight into `message`.
+    static CURRENT_EXCEPTION: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
 }
 
 /// A `MakeWriter` that wraps another one, splicing `CURRENT_ATTRIBUTES` into each
@@ -79,7 +84,8 @@ impl<W: io::Write> io::Write for AttributeInjectingWriter<W> {
 fn inject_attributes(buf: &[u8]) -> Option<Vec<u8>> {
     let attributes = CURRENT_ATTRIBUTES.with(|cell| cell.borrow().clone());
     let spans = CURRENT_SPANS.with(|cell| cell.borrow().clone());
-    if attributes.is_none() && spans.is_none() {
+    let exception = CURRENT_EXCEPTION.with(|cell| cell.borrow().clone());
+    if attributes.is_none() && spans.is_none() && exception.is_none() {
         return None;
     }
     let mut value: serde_json::Value = serde_json::from_slice(buf).ok()?;
@@ -90,6 +96,9 @@ fn inject_attributes(buf: &[u8]) -> Option<Vec<u8>> {
     }
     if let Some(spans) = spans {
         object.insert("spans".to_string(), spans);
+    }
+    if let Some(exception) = exception {
+        object.insert("exception".to_string(), exception);
     }
     let mut out = serde_json::to_vec(&value).ok()?;
     out.push(b'\n');
@@ -369,7 +378,9 @@ macro_rules! dispatch_log {
 ///
 /// `attributes`/`spans_json`, when set, are handed to JSON-format layers as typed
 /// nested values (see `AttributeInjectingWriter`) instead of going through `extra`'s
-/// and `spans`'s stringified forms.
+/// and `spans`'s stringified forms. `exception`, when set, is JSON-only -- text
+/// formats already carry the traceback embedded in `message` (see
+/// `CURRENT_EXCEPTION`).
 // Each argument mirrors one independent field of Python's `LogRecord`; there's no
 // natural subgrouping that wouldn't just be a struct wrapping this same fixed list.
 #[allow(clippy::too_many_arguments)]
@@ -384,6 +395,7 @@ pub fn log_sink(
     attributes: Option<serde_json::Value>,
     spans: Option<&str>,
     spans_json: Option<serde_json::Value>,
+    exception: Option<serde_json::Value>,
 ) {
     let location_str = if let Some(ref f) = filename {
         Some(format!(
@@ -410,11 +422,15 @@ pub fn log_sink(
     if spans_json.is_some() {
         CURRENT_SPANS.with(|cell| *cell.borrow_mut() = spans_json);
     }
+    if exception.is_some() {
+        CURRENT_EXCEPTION.with(|cell| *cell.borrow_mut() = exception);
+    }
 
     dispatch_log!(levelno, message, location_str, extra, spans);
 
     CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
     CURRENT_SPANS.with(|cell| *cell.borrow_mut() = None);
+    CURRENT_EXCEPTION.with(|cell| *cell.borrow_mut() = None);
 }
 
 #[cfg(test)]
@@ -524,6 +540,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -545,6 +562,7 @@ mod tests {
                 Some(42),
                 Some("test_module".to_string()),
                 Some("test=data"),
+                None,
                 None,
                 None,
                 None,
@@ -572,6 +590,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -596,6 +615,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -612,6 +632,7 @@ mod tests {
             log_sink(
                 level,
                 "test message",
+                None,
                 None,
                 None,
                 None,
@@ -719,6 +740,7 @@ mod tests {
             Some(serde_json::json!({"user_id": 42})),
             None,
             None,
+            None,
         );
 
         let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
@@ -777,6 +799,7 @@ mod tests {
             None,
             Some("request{request_id=42}"),
             Some(serde_json::json!([{"name": "request", "fields": {"request_id": 42}}])),
+            None,
         );
 
         let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
@@ -791,5 +814,68 @@ mod tests {
         // default text visitor debug-quotes raw `&str` fields, unlike `%`-wrapped ones.
         let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
         assert!(compact_output.contains(r#"spans="request{request_id=42}""#));
+    }
+
+    #[test]
+    fn test_json_layer_emits_typed_exception_and_compact_layer_is_unaffected() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let json_buf = SharedBuf::default();
+        let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+
+        let compact_buf = SharedBuf::default();
+        let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
+        let compact_layer =
+            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+
+        let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        log_sink(
+            40,
+            "boom happened\nTraceback (most recent call last):\nValueError: oops",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(serde_json::json!({
+                "type": "ValueError",
+                "message": "oops",
+                "traceback": "Traceback (most recent call last):\nValueError: oops",
+            })),
+        );
+
+        let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
+        let json_value: serde_json::Value = serde_json::from_str(json_output.trim()).unwrap();
+        assert_eq!(json_value["exception"]["type"], "ValueError");
+        assert_eq!(json_value["exception"]["message"], "oops");
+
+        let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
+        assert!(!compact_output.contains("exception"));
     }
 }

@@ -88,5 +88,6 @@ def _log_sink(
     module_name: str,
     extra: dict | None = None,
     spans: list[dict] | None = None,
+    exception: dict | None = None,
 ) -> None:
     """Receive log messages from Python and forward them to Rust."""

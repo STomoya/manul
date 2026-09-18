@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import TYPE_CHECKING, Literal
 from unittest.mock import ANY
 
@@ -131,6 +132,7 @@ class TestLogFunctions:
             module_name='test_logger',
             extra={'key': 'value'},
             spans=None,
+            exception=None,
         )
 
     def test_log_sink(self, mock_log_sink: MockType) -> None:
@@ -153,6 +155,31 @@ class TestLogFunctions:
             module_name='test_mod',
             extra={'key': 'value'},
             spans=None,
+            exception=None,
+        )
+
+    def test_log_sink_forwards_exception(self, mock_log_sink: MockType) -> None:
+        """Test that log_sink forwards a passed exception payload as-is."""
+        exception = {'type': 'ValueError', 'message': 'oops', 'traceback': 'Traceback...'}
+        _functions.log_sink(
+            levelno=40,
+            message='boom',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test_mod',
+            exception=exception,
+        )
+        mock_log_sink.assert_called_once_with(
+            levelno=40,
+            message='boom',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test_mod',
+            extra=None,
+            spans=None,
+            exception=exception,
         )
 
     def test_log_sink_attaches_current_spans(self, mock_log_sink: MockType) -> None:
@@ -172,6 +199,7 @@ class TestLogFunctions:
                 {'name': 'outer', 'fields': {'request_id': 1}},
                 {'name': 'inner', 'fields': {'step': 'validate'}},
             ],
+            exception=None,
         )
 
 
@@ -274,6 +302,7 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra={'extra_key': 'extra_value'},
+            exception=None,
         )
 
     def test_no_extra(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
@@ -293,7 +322,36 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra=None,
+            exception=None,
         )
+
+    def test_emit_with_exc_info_builds_exception_payload(
+        self,
+        mocker: MockerFixture,
+        mock_record: logging.LogRecord,
+    ) -> None:
+        """Test that emit captures exc_info as a typed {type, message, traceback} dict."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+        handler = TracingHandler()
+
+        error_message = 'oops'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            mock_record.exc_info = sys.exc_info()
+
+        handler.emit(mock_record)
+
+        mock_log_sink.assert_called_once()
+        exception = mock_log_sink.call_args.kwargs['exception']
+        assert exception['type'] == 'ValueError'
+        assert exception['message'] == error_message
+        assert 'Traceback' in exception['traceback']
+        assert 'ValueError: oops' in exception['traceback']
 
     def test_handle_error(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
         """Test the handleError method of TracingHandler."""
@@ -319,5 +377,6 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra=None,
+            exception=None,
         )
         mock_handle_error.assert_called_once_with(handler, mock_record)
