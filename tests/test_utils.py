@@ -5,7 +5,7 @@ from typing import Literal
 import pytest
 from pytest_mock import MockerFixture
 
-from manul.utils import find_paths
+from manul.utils import extract_structured, find_all_offsets, find_paths, match_any, replace_many, sub_optimized
 
 
 class TestFindPaths:
@@ -93,3 +93,47 @@ class TestFindPaths:
             path_type=None,
             sort_strategy=None,
         )
+
+
+class TestStringUtils:
+    """Tests for the string utils."""
+
+    def test_find_all_offsets(self, mocker: MockerFixture):
+        """Test the find_all_offsets function."""
+        mock_core = mocker.patch('manul.utils._core')
+
+        find_all_offsets(text='test', pattern='test')
+
+        mock_core.find_all_offsets.assert_called_once_with(text='test', pattern='test')
+
+    def test_match_any(self, mocker: MockerFixture):
+        """Test the match_any function."""
+        mock_core = mocker.patch('manul.utils._core')
+
+        match_any(text='test', patterns=['test'])
+
+        mock_core.match_any.assert_called_once_with(text='test', patterns=['test'])
+
+    def test_replace_many(self, mocker: MockerFixture):
+        """Test the replace_many function."""
+        mock_core = mocker.patch('manul.utils._core')
+
+        replace_many(text='test', replacements={'test': 'test'})
+
+        mock_core.replace_many.assert_called_once_with(text='test', replacements={'test': 'test'})
+
+    def test_sub_optimized(self, mocker: MockerFixture):
+        """Test the sub_optimized function."""
+        mock_core = mocker.patch('manul.utils._core')
+
+        sub_optimized(text='test', pattern='test', replacement='test')
+
+        mock_core.sub_optimized.assert_called_once_with(text='test', pattern='test', replacement='test')
+
+    def test_extract_structured(self, mocker: MockerFixture):
+        """Test the extract_structured function."""
+        mock_core = mocker.patch('manul.utils._core')
+
+        extract_structured(text='test', pattern='test')
+
+        mock_core.extract_structured.assert_called_once_with(text='test', pattern='test')
