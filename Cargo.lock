@@ -84,7 +84,6 @@ dependencies = [
  "aho-corasick",
  "glob",
  "natord",
- "pyo3",
  "regex",
  "textwrap",
 ]
@@ -93,7 +92,6 @@ dependencies = [
 name = "manul_logger"
 version = "0.1.0"
 dependencies = [
- "pyo3",
  "tracing",
  "tracing-appender",
  "tracing-log",
