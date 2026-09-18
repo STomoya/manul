@@ -1,141 +1,91 @@
 use glob::{MatchOptions, glob_with};
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-/// Define the PathType enum with Python bindings.
-/// This enum allows users to specify whether they want to filter for files, directories, or both when using the find_paths function.
-#[pyclass(name = "PathType", eq, eq_int, from_py_object)]
+/// The kind of filesystem entry to keep when filtering glob results.
 #[derive(PartialEq, Clone, Debug)]
-pub enum PyPathType {
+pub enum PathType {
     FilesOnly,
     DirectoriesOnly,
     Both,
 }
 
-#[pymethods]
-impl PyPathType {
-    #[new]
-    /// Create a new PathType from a string. The string can be "file", "directory", or "both" (case-insensitive).
-    /// # Arguments
-    /// * `value` - The string representation of the PathType.
-    pub fn new(value: &str) -> PyResult<Self> {
-        PyPathType::from_str(value).map_err(|e: String| PyValueError::new_err(e))
-    }
-
-    fn __str__(&self) -> String {
+impl PathType {
+    pub fn to_str(&self) -> &'static str {
         match self {
-            PyPathType::FilesOnly => "file".into(),
-            PyPathType::DirectoriesOnly => "directory".into(),
-            PyPathType::Both => "both".into(),
+            PathType::FilesOnly => "file",
+            PathType::DirectoriesOnly => "directory",
+            PathType::Both => "both",
         }
-    }
-
-    fn __repr__(&self) -> String {
-        let self_string = self.__str__();
-        format!("PathType(\"{}\")", self_string)
     }
 }
 
-impl FromStr for PyPathType {
+impl FromStr for PathType {
     type Err = String;
 
-    /// Create a new PathType from a string. The string can be "file", "directory", or "both" (case-insensitive).
-    /// # Arguments
-    /// * `s` - The string representation of the PathType.
-    /// # Errors
-    /// This function will return an error if the input string does not match any of the valid
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "file" => Ok(PyPathType::FilesOnly),
-            "f" => Ok(PyPathType::FilesOnly),
-            "directory" => Ok(PyPathType::DirectoriesOnly),
-            "d" => Ok(PyPathType::DirectoriesOnly),
-            "both" => Ok(PyPathType::Both),
+            "file" => Ok(PathType::FilesOnly),
+            "f" => Ok(PathType::FilesOnly),
+            "directory" => Ok(PathType::DirectoriesOnly),
+            "d" => Ok(PathType::DirectoriesOnly),
+            "both" => Ok(PathType::Both),
             _ => Err(format!("Invalid PathType: {}", s)),
         }
     }
 }
 
-/// Define the SortStrategy enum with Python bindings.
-/// This enum allows users to specify how results should be sorted when using the find_paths function.
-/// # Arguments
-/// * `value` - The string representation of the SortStrategy.
-#[pyclass(name = "SortStrategy", eq, eq_int, from_py_object)]
+/// How glob results should be ordered.
 #[derive(PartialEq, Clone, Debug)]
-pub enum PySortStrategy {
-    // We want to use None but None is a reserved keyword in Python, so we use No instead and map it to "none" in the string representation.
+pub enum SortStrategy {
     No,
     Standard,
     Natural,
 }
 
-#[pymethods]
-impl PySortStrategy {
-    #[new]
-    /// Create a new SortStrategy from a string. The string can be "none", "standard", or "natural" (case-insensitive).
-    /// # Arguments
-    /// * `value` - The string representation of the SortStrategy.
-    pub fn new(value: &str) -> PyResult<Self> {
-        PySortStrategy::from_str(value).map_err(|e: String| PyValueError::new_err(e))
-    }
-
-    fn __str__(&self) -> String {
+impl SortStrategy {
+    pub fn to_str(&self) -> &'static str {
         match self {
-            PySortStrategy::No => "none".into(),
-            PySortStrategy::Standard => "standard".into(),
-            PySortStrategy::Natural => "natural".into(),
+            SortStrategy::No => "none",
+            SortStrategy::Standard => "standard",
+            SortStrategy::Natural => "natural",
         }
-    }
-
-    fn __repr__(&self) -> String {
-        let self_string = self.__str__();
-        format!("SortStrategy(\"{}\")", self_string)
     }
 }
 
-impl FromStr for PySortStrategy {
+impl FromStr for SortStrategy {
     type Err = String;
 
-    /// Create a new SortStrategy from a string. The string can be "none", "standard", or "natural" (case-insensitive).
-    /// # Arguments
-    /// * `s` - The string representation of the SortStrategy.
-    /// # Errors
-    /// This function will return an error if the input string does not match any of the valid options.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "none" => Ok(PySortStrategy::No),
-            "standard" => Ok(PySortStrategy::Standard),
-            "natural" => Ok(PySortStrategy::Natural),
+            "none" => Ok(SortStrategy::No),
+            "standard" => Ok(SortStrategy::Standard),
+            "natural" => Ok(SortStrategy::Natural),
             _ => Err(format!("Invalid SortStrategy: {}", s)),
         }
     }
 }
 
-/// The core Rust function that performs the globbing, filtering, and sorting logic.
-/// This function is not exposed to Python directly, but is called by the Python wrapper.
+/// Performs the globbing, filtering, and sorting logic.
 /// # Arguments
 /// * `pattern` - The glob pattern to search for.
 /// * `keyword` - An optional keyword to filter results by name.
 /// * `path_type` - An optional PathType to filter by files, directories, or both.
 /// * `sort_strategy` - An optional SortStrategy to determine how results are sorted.
-/// # Panics
-/// This function will return an error if the glob pattern is invalid.
-fn glob_pipeline(
+pub fn glob_pipeline(
     pattern: &str,
     keyword: Option<&str>,
-    path_type: Option<PyPathType>,
-    sort_strategy: Option<PySortStrategy>,
+    path_type: Option<PathType>,
+    sort_strategy: Option<SortStrategy>,
     include_hidden: bool,
 ) -> Result<Vec<PathBuf>, String> {
-    let target_type = path_type.unwrap_or(PyPathType::Both);
-    let target_sort = sort_strategy.unwrap_or(PySortStrategy::No);
+    let target_type = path_type.unwrap_or(PathType::Both);
+    let target_sort = sort_strategy.unwrap_or(SortStrategy::No);
 
     let options = MatchOptions {
         case_sensitive: true,
         require_literal_separator: false,
-        require_literal_leading_dot: !include_hidden, // If include_hidden is false, we require a literal leading dot to exclude hidden files
+        require_literal_leading_dot: !include_hidden,
     };
 
     let entries =
@@ -145,8 +95,8 @@ fn glob_pipeline(
         .filter_map(Result::ok)
         .filter(|path| {
             match target_type {
-                PyPathType::FilesOnly if !path.is_file() => return false,
-                PyPathType::DirectoriesOnly if !path.is_dir() => return false,
+                PathType::FilesOnly if !path.is_file() => return false,
+                PathType::DirectoriesOnly if !path.is_dir() => return false,
                 _ => {}
             }
 
@@ -162,54 +112,18 @@ fn glob_pipeline(
         .collect();
 
     match target_sort {
-        PySortStrategy::Natural => {
+        SortStrategy::Natural => {
             results.sort_unstable_by(|a, b| {
                 let a_str = a.to_string_lossy();
                 let b_str = b.to_string_lossy();
                 natord::compare(&a_str, &b_str)
             });
         }
-        PySortStrategy::Standard => results.sort_unstable(),
-        PySortStrategy::No => {}
+        SortStrategy::Standard => results.sort_unstable(),
+        SortStrategy::No => {}
     }
 
     Ok(results)
-}
-
-/// The Python wrapper function that is exposed to Python. This function handles the conversion of arguments and return values between Rust and Python.
-/// # Arguments
-/// * `pattern` - The glob pattern to search for.
-/// * `keyword` - An optional keyword to filter results by name.
-/// * `path_type` - An optional PathType to filter by files, directories, or both.
-/// * `sort_strategy` - An optional SortStrategy to determine how results are sorted.
-/// # Returns
-/// A list of strings representing the paths that match the glob pattern and filters. This will be converted to a Python list of strings by PyO3.
-#[pyfunction]
-#[pyo3(signature = (pattern, keyword=None, path_type=None, sort_strategy=None, include_hidden=false))]
-pub fn find_paths(
-    pattern: &str,
-    keyword: Option<&str>,
-    path_type: Option<PyPathType>,
-    sort_strategy: Option<PySortStrategy>,
-    include_hidden: bool,
-) -> PyResult<Vec<String>> {
-    // PyO3 automatically converts Vec<String> into a Python list[str]
-
-    // Call the pure Rust pipeline
-    match glob_pipeline(pattern, keyword, path_type, sort_strategy, include_hidden) {
-        Ok(paths) => {
-            // Convert Rust PathBufs back to standard Strings for Python
-            let string_paths = paths
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            Ok(string_paths)
-        }
-        Err(e) => {
-            // If the glob pattern is invalid, throw a standard Python ValueError
-            Err(PyValueError::new_err(e))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -229,91 +143,47 @@ mod tests {
         path
     }
 
-    // Pythonic Enum tests
-
     #[test]
     fn test_path_type_from_str() {
-        assert_eq!(PyPathType::from_str("file").unwrap(), PyPathType::FilesOnly);
-        assert_eq!(PyPathType::from_str("f").unwrap(), PyPathType::FilesOnly);
+        assert_eq!(PathType::from_str("file").unwrap(), PathType::FilesOnly);
+        assert_eq!(PathType::from_str("f").unwrap(), PathType::FilesOnly);
         assert_eq!(
-            PyPathType::from_str("directory").unwrap(),
-            PyPathType::DirectoriesOnly
+            PathType::from_str("directory").unwrap(),
+            PathType::DirectoriesOnly
         );
-        assert_eq!(
-            PyPathType::from_str("d").unwrap(),
-            PyPathType::DirectoriesOnly
-        );
-        assert_eq!(PyPathType::from_str("both").unwrap(), PyPathType::Both);
-        assert!(PyPathType::from_str("invalid").is_err());
+        assert_eq!(PathType::from_str("d").unwrap(), PathType::DirectoriesOnly);
+        assert_eq!(PathType::from_str("both").unwrap(), PathType::Both);
+        assert!(PathType::from_str("invalid").is_err());
     }
 
     #[test]
-    fn test_path_type_new() {
-        Python::initialize();
-        assert!(PyPathType::new("file").is_ok());
-        assert!(PyPathType::new("invalid").is_err());
-    }
-
-    #[test]
-    fn test_path_type_str_repr() {
-        assert_eq!(PyPathType::FilesOnly.__str__(), "file");
-        assert_eq!(PyPathType::FilesOnly.__repr__(), "PathType(\"file\")");
-
-        assert_eq!(PyPathType::DirectoriesOnly.__str__(), "directory");
-        assert_eq!(
-            PyPathType::DirectoriesOnly.__repr__(),
-            "PathType(\"directory\")"
-        );
-
-        assert_eq!(PyPathType::Both.__str__(), "both");
-        assert_eq!(PyPathType::Both.__repr__(), "PathType(\"both\")");
+    fn test_path_type_to_str() {
+        assert_eq!(PathType::FilesOnly.to_str(), "file");
+        assert_eq!(PathType::DirectoriesOnly.to_str(), "directory");
+        assert_eq!(PathType::Both.to_str(), "both");
     }
 
     #[test]
     fn test_sort_strategy_from_str() {
+        assert_eq!(SortStrategy::from_str("none").unwrap(), SortStrategy::No);
         assert_eq!(
-            PySortStrategy::from_str("none").unwrap(),
-            PySortStrategy::No
+            SortStrategy::from_str("standard").unwrap(),
+            SortStrategy::Standard
         );
         assert_eq!(
-            PySortStrategy::from_str("standard").unwrap(),
-            PySortStrategy::Standard
+            SortStrategy::from_str("natural").unwrap(),
+            SortStrategy::Natural
         );
-        assert_eq!(
-            PySortStrategy::from_str("natural").unwrap(),
-            PySortStrategy::Natural
-        );
-        assert!(PySortStrategy::from_str("invalid").is_err());
+        assert!(SortStrategy::from_str("invalid").is_err());
     }
 
     #[test]
-    fn test_sort_strategy_new() {
-        Python::initialize();
-        assert!(PySortStrategy::new("none").is_ok());
-        assert!(PySortStrategy::new("invalid").is_err());
+    fn test_sort_strategy_to_str() {
+        assert_eq!(SortStrategy::No.to_str(), "none");
+        assert_eq!(SortStrategy::Standard.to_str(), "standard");
+        assert_eq!(SortStrategy::Natural.to_str(), "natural");
     }
 
-    #[test]
-    fn test_sort_strategy_str_repr() {
-        assert_eq!(PySortStrategy::No.__str__(), "none");
-        assert_eq!(PySortStrategy::No.__repr__(), "SortStrategy(\"none\")");
-
-        assert_eq!(PySortStrategy::Standard.__str__(), "standard");
-        assert_eq!(
-            PySortStrategy::Standard.__repr__(),
-            "SortStrategy(\"standard\")"
-        );
-
-        assert_eq!(PySortStrategy::Natural.__str__(), "natural");
-        assert_eq!(
-            PySortStrategy::Natural.__repr__(),
-            "SortStrategy(\"natural\")"
-        );
-    }
-
-    // Rust pipeline tests
-
-    /// Test for dispatching path collection target based on input parameters.
     #[test]
     fn test_glob_pipeline_path_types() {
         let dir = get_temp_dir("path_types");
@@ -323,29 +193,21 @@ mod tests {
 
         let pattern = format!("{}/*", dir.to_string_lossy());
 
-        let files =
-            glob_pipeline(&pattern, None, Some(PyPathType::FilesOnly), None, false).unwrap();
+        let files = glob_pipeline(&pattern, None, Some(PathType::FilesOnly), None, false).unwrap();
         assert_eq!(files.len(), 1);
         assert!(files[0].is_file());
 
-        let dirs = glob_pipeline(
-            &pattern,
-            None,
-            Some(PyPathType::DirectoriesOnly),
-            None,
-            false,
-        )
-        .unwrap();
+        let dirs =
+            glob_pipeline(&pattern, None, Some(PathType::DirectoriesOnly), None, false).unwrap();
         assert_eq!(dirs.len(), 1);
         assert!(dirs[0].is_dir());
 
-        let both = glob_pipeline(&pattern, None, Some(PyPathType::Both), None, false).unwrap();
+        let both = glob_pipeline(&pattern, None, Some(PathType::Both), None, false).unwrap();
         assert_eq!(both.len(), 2);
 
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Test for keyword-based filtering
     #[test]
     fn test_glob_pipeline_keywords() {
         let dir = get_temp_dir("keywords");
@@ -365,7 +227,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Test for natural and standard sorting
     #[test]
     fn test_glob_pipeline_sorting() {
         let dir = get_temp_dir("sorting");
@@ -376,9 +237,8 @@ mod tests {
 
         let pattern = format!("{}/*", dir.to_string_lossy());
 
-        // Standard sort should put "file_10" before "file_2"
         let standard =
-            glob_pipeline(&pattern, None, None, Some(PySortStrategy::Standard), false).unwrap();
+            glob_pipeline(&pattern, None, None, Some(SortStrategy::Standard), false).unwrap();
         let standard_names: Vec<_> = standard
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap())
@@ -388,9 +248,8 @@ mod tests {
             vec!["file_1.txt", "file_10.txt", "file_2.txt"]
         );
 
-        // Natural sort should put "file_2" before "file_10"
         let natural =
-            glob_pipeline(&pattern, None, None, Some(PySortStrategy::Natural), false).unwrap();
+            glob_pipeline(&pattern, None, None, Some(SortStrategy::Natural), false).unwrap();
         let natural_names: Vec<_> = natural
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap())
@@ -403,7 +262,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Test for including/excluding hidden files.
     #[test]
     fn test_glob_pipeline_hidden() {
         let dir = get_temp_dir("hidden");
@@ -413,7 +271,6 @@ mod tests {
 
         let pattern = format!("{}/*", dir.to_string_lossy());
 
-        // By default (include_hidden=false), glob_with MatchOptions should skip the leading dot
         let no_hidden = glob_pipeline(&pattern, None, None, None, false).unwrap();
         assert_eq!(no_hidden.len(), 1);
         assert_eq!(
@@ -421,53 +278,16 @@ mod tests {
             "visible.txt"
         );
 
-        // include_hidden=true should include the leading dot
         let with_hidden = glob_pipeline(&pattern, None, None, None, true).unwrap();
         assert_eq!(with_hidden.len(), 2);
 
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Test for invalid glob patterns.
     #[test]
     fn test_glob_pipeline_invalid_pattern() {
         let result = glob_pipeline("***[invalid", None, None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid glob pattern"));
-    }
-
-    // Python wrapper tests
-
-    /// Test for succesful pipeline execution.
-    #[test]
-    fn test_find_paths_python_wrapper() {
-        Python::initialize();
-        let dir = get_temp_dir("find_paths_wrapper");
-        fs::create_dir_all(&dir).unwrap();
-        File::create(dir.join("test.txt")).unwrap();
-
-        let pattern = format!("{}/*.txt", dir.to_string_lossy());
-
-        let result = find_paths(&pattern, None, None, None, false);
-        assert!(result.is_ok());
-        let paths = result.unwrap();
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].ends_with("test.txt"));
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    /// Test for failed pipeline execution.
-    #[test]
-    fn test_find_paths_invalid_pattern() {
-        Python::initialize();
-        let result = find_paths("***[invalid", None, None, None, false);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid glob pattern")
-        );
     }
 }

@@ -1,20 +1,5 @@
-use pyo3::prelude::*;
-
 pub mod funtext;
-mod utils;
+pub mod utils;
 
-#[pymodule(name = "_core")]
-pub mod manul_core {
-
-    #[allow(non_upper_case_globals)]
-    #[pymodule_export]
-    pub const __version__: &str = env!("CARGO_PKG_VERSION");
-
-    #[pymodule_export]
-    pub use super::utils::{PyPathType, PySortStrategy, find_paths};
-
-    #[pymodule_export]
-    pub use super::utils::{
-        extract_structured, find_all_offsets, match_any, replace_many, sub_optimized,
-    };
-}
+/// The version of this crate, exposed to consumers (e.g. Python bindings) that want to report it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

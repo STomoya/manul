@@ -84,7 +84,6 @@ dependencies = [
  "aho-corasick",
  "glob",
  "natord",
- "pyo3",
  "regex",
  "textwrap",
 ]

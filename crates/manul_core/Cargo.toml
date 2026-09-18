@@ -11,6 +11,5 @@ authors = ["STomoya"]
 aho-corasick = "1.1.4"
 glob = "0.3.3"
 natord = "1.0.9"
-pyo3 = { workspace = true, features = ["abi3-py311"] }
 regex = "1.12.3"
 textwrap = "0.16.2"
