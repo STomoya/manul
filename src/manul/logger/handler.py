@@ -44,7 +44,7 @@ class TracingHandler(Handler):
         """
         try:
             message = self.format(record)
-            extra_fields = {str(k): str(v) for k, v in record.__dict__.items() if k not in _STANDARD_ATTRS}
+            extra_fields = {k: v for k, v in record.__dict__.items() if k not in _STANDARD_ATTRS}
             if not extra_fields:
                 extra_fields = None
 

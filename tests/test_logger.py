@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Literal
+from unittest.mock import ANY
 
 import pytest
 
@@ -16,8 +17,6 @@ from manul.logger import _functions
 from manul.logger.handler import TracingHandler
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from pytest_mock import MockerFixture, MockType
 
 
@@ -106,64 +105,34 @@ class TestLogFunctions:
     """Tests for the logging functions (info, debug, warn, error, trace, log_sink)."""
 
     @pytest.fixture
-    def mock_log_fn(self, mocker: MockerFixture) -> Callable[..., MockType]:
-        """Mock the underlying log functions in the _logger module."""
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function."""
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
 
-        def factory(level: str) -> MockType:
-            """Create a mock for the specified log level."""
-            target = _functions if hasattr(_functions, level) else _logger
-            return mocker.patch.object(target, level, autospec=True)
-
-        return factory
-
-    def test_info(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the info function."""
-        mock_log = mock_log_fn('info')
-        _functions.info('test info message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test info message',
+    @pytest.mark.parametrize(
+        ('level', 'levelno'),
+        [('trace', 0), ('debug', 10), ('info', 20), ('warn', 30), ('error', 40)],
+    )
+    def test_level_function_reports_caller_as_location(
+        self,
+        mock_log_sink: MockType,
+        level: str,
+        levelno: int,
+    ) -> None:
+        """Test that trace/debug/info/warn/error attribute the log to their caller's frame."""
+        getattr(_functions, level)(f'test {level} message', extra={'key': 'value'})
+        mock_log_sink.assert_called_once_with(
+            levelno=levelno,
+            message=f'test {level} message',
+            filename=__file__,
+            func_name='test_level_function_reports_caller_as_location',
+            lineno=ANY,
+            module_name='test_logger',
             extra={'key': 'value'},
         )
 
-    def test_debug(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the debug function."""
-        mock_log = mock_log_fn('debug')
-        _functions.debug('test debug message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test debug message',
-            extra={'key': 'value'},
-        )
-
-    def test_warn(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the warn function."""
-        mock_log = mock_log_fn('warn')
-        _functions.warn('test warn message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test warn message',
-            extra={'key': 'value'},
-        )
-
-    def test_error(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the error function."""
-        mock_log = mock_log_fn('error')
-        _functions.error('test error message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test error message',
-            extra={'key': 'value'},
-        )
-
-    def test_trace(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the trace function."""
-        mock_log = mock_log_fn('trace')
-        _functions.trace('test trace message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test trace message',
-            extra={'key': 'value'},
-        )
-
-    def test_log_sink(self, mock_log_fn: Callable[..., MockType]) -> None:
+    def test_log_sink(self, mock_log_sink: MockType) -> None:
         """Test the log_sink function."""
-        mock_log = mock_log_fn('_log_sink')
         _functions.log_sink(
             levelno=20,
             message='test sink message',
@@ -173,7 +142,7 @@ class TestLogFunctions:
             module_name='test_mod',
             extra={'key': 'value'},
         )
-        mock_log.assert_called_once_with(
+        mock_log_sink.assert_called_once_with(
             levelno=20,
             message='test sink message',
             filename='test.py',

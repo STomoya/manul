@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Any
 
 __version__: str
 """The version of the manul_logger module."""
@@ -79,21 +78,6 @@ class TracingGuard:
 
 def init_tracing(layers: list[LayerConfig]) -> TracingGuard:
     """Initialize the tracing system."""
-
-def info(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log an info-level message."""
-
-def debug(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a debug-level message."""
-
-def warn(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a warning-level message."""
-
-def error(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log an error-level message."""
-
-def trace(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a trace-level message."""
 
 def _log_sink(
     levelno: int,

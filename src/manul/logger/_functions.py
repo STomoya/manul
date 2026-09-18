@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 from manul._manul import _logger
@@ -82,11 +84,56 @@ def init_tracing(layers: list[_logger.LayerConfig]) -> _logger.TracingGuard:
     return _logger.init_tracing(layers)
 
 
-debug = _logger.debug
-error = _logger.error
-info = _logger.info
-trace = _logger.trace
-warn = _logger.warn
+# Mirrors the levelno values manul_pyo3's log_sink dispatches on.
+_LEVELS = {'trace': 0, 'debug': 10, 'info': 20, 'warn': 30, 'error': 40}
+
+
+def _log(level: str, message: str, extra: dict | None) -> None:
+    """Log a message, attributing it to the caller of the public level function.
+
+    Args:
+        level (str): One of `_LEVELS`' keys.
+        message (str): The log message.
+        extra (dict | None): Extra data to log.
+
+    """
+    # Frame 0 is this function, frame 1 is the public trace/debug/info/warn/error
+    # wrapper, frame 2 is their caller -- the callsite we want to report.
+    frame = sys._getframe(2)
+    _logger._log_sink(
+        levelno=_LEVELS[level],
+        message=message,
+        filename=frame.f_code.co_filename,
+        func_name=frame.f_code.co_name,
+        lineno=frame.f_lineno,
+        module_name=Path(frame.f_code.co_filename).stem,
+        extra=extra,
+    )
+
+
+def trace(message: str, extra: dict | None = None) -> None:
+    """Log a trace-level message."""
+    _log('trace', message, extra)
+
+
+def debug(message: str, extra: dict | None = None) -> None:
+    """Log a debug-level message."""
+    _log('debug', message, extra)
+
+
+def info(message: str, extra: dict | None = None) -> None:
+    """Log an info-level message."""
+    _log('info', message, extra)
+
+
+def warn(message: str, extra: dict | None = None) -> None:
+    """Log a warning-level message."""
+    _log('warn', message, extra)
+
+
+def error(message: str, extra: dict | None = None) -> None:
+    """Log an error-level message."""
+    _log('error', message, extra)
 
 
 def log_sink(

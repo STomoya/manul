@@ -14,8 +14,7 @@ pub mod logger_bindings {
 
     #[pymodule_export]
     pub use super::{
-        _log_sink, PyLayerConfig, PyLayerDestination, PyLogFormat, PyTracingGuard, debug, error,
-        info, init_tracing, trace, warn,
+        _log_sink, PyLayerConfig, PyLayerDestination, PyLogFormat, PyTracingGuard, init_tracing,
     };
 }
 
@@ -250,96 +249,6 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
     }
 }
 
-/// Log an info-level message.
-#[pyfunction(name = "info")]
-#[pyo3(signature = (message, extra=None))]
-pub fn info(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.as_ref().map(dict_to_string);
-    let attributes = extra.as_ref().map(dict_to_json);
-    log_sink(
-        20,
-        message,
-        None,
-        None,
-        None,
-        None,
-        extra_str.as_deref(),
-        attributes,
-    );
-}
-
-/// Log a warning-level message.
-#[pyfunction(name = "warn")]
-#[pyo3(signature = (message, extra=None))]
-pub fn warn(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.as_ref().map(dict_to_string);
-    let attributes = extra.as_ref().map(dict_to_json);
-    log_sink(
-        30,
-        message,
-        None,
-        None,
-        None,
-        None,
-        extra_str.as_deref(),
-        attributes,
-    );
-}
-
-/// Log an error-level message.
-#[pyfunction(name = "error")]
-#[pyo3(signature = (message, extra=None))]
-pub fn error(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.as_ref().map(dict_to_string);
-    let attributes = extra.as_ref().map(dict_to_json);
-    log_sink(
-        40,
-        message,
-        None,
-        None,
-        None,
-        None,
-        extra_str.as_deref(),
-        attributes,
-    );
-}
-
-/// Log a debug-level message.
-#[pyfunction(name = "debug")]
-#[pyo3(signature = (message, extra=None))]
-pub fn debug(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.as_ref().map(dict_to_string);
-    let attributes = extra.as_ref().map(dict_to_json);
-    log_sink(
-        10,
-        message,
-        None,
-        None,
-        None,
-        None,
-        extra_str.as_deref(),
-        attributes,
-    );
-}
-
-/// Log a trace-level message.
-#[pyfunction(name = "trace")]
-#[pyo3(signature = (message, extra=None))]
-pub fn trace(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.as_ref().map(dict_to_string);
-    let attributes = extra.as_ref().map(dict_to_json);
-    log_sink(
-        0,
-        message,
-        None,
-        None,
-        None,
-        None,
-        extra_str.as_deref(),
-        attributes,
-    );
-}
-
 #[pyfunction(name = "_log_sink")]
 #[pyo3(signature = (levelno, message, filename=None, func_name=None, lineno=None, module_name=None, extra=None))]
 pub fn _log_sink(
@@ -494,16 +403,11 @@ mod tests {
     }
 
     #[test]
-    fn test_level_wrappers_smoke() {
+    fn test_log_sink_wrapper_smoke() {
         Python::initialize();
         Python::attach(|py| {
             let extra = PyDict::new(py);
             extra.set_item("k", "v").unwrap();
-            info("hello", Some(extra.clone()));
-            warn("hello", None);
-            debug("hello", None);
-            error("hello", None);
-            trace("hello", None);
             _log_sink(20, "hello", None, None, None, None, Some(extra));
         });
     }
