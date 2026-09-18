@@ -35,7 +35,7 @@ _STANDARD_ATTRS = {
 class TracingHandler(Handler):
     """A logging handler that forwards Python logs to the Rust tracing system."""
 
-    def emit(self, record: logging.LogRecord):
+    def emit(self, record: logging.LogRecord) -> None:
         """Emit a record.
 
         Args:

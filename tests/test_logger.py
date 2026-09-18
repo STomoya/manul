@@ -4,22 +4,28 @@ Does not test rust code directly, but tests the Python wrapper functions in manu
 Rust calls are mocked to verify that the correct parameters are passed from Python to Rust.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Literal
 
 import pytest
-from pytest_mock import MockerFixture, MockType
 
 from manul._manul import _logger  # ty: ignore[unresolved-import]
 from manul.logger import _functions
 from manul.logger.handler import TracingHandler
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from pytest_mock import MockerFixture, MockType
 
 
 class TestBuildLayerConfig:
     """Tests for the build_layer_config function."""
 
     @pytest.mark.parametrize(
-        'format, expected_format',
+        ('format', 'expected_format'),
         [
             ('json', _logger.LogFormat.Json),
             ('compact', _logger.LogFormat.Compact),
@@ -28,7 +34,9 @@ class TestBuildLayerConfig:
         ids=['json', 'compact', 'default'],
     )
     def test_format(
-        self, format: Literal['compact', 'pretty', 'json'] | None, expected_format: _logger.LogFormat
+        self,
+        format: Literal['compact', 'pretty', 'json'] | None,  # noqa: A002 -- mirrors the pyo3 LayerConfig kwarg
+        expected_format: _logger.LogFormat,
     ) -> None:
         """Test the format parameter."""
         config = _functions.build_layer_config(
@@ -43,7 +51,7 @@ class TestBuildLayerConfig:
         assert config.format == expected_format
 
     @pytest.mark.parametrize(
-        'destination, expected_destination',
+        ('destination', 'expected_destination'),
         [
             ('console', _logger.LayerDestination.Console),
             ('file', _logger.LayerDestination.File),
@@ -52,7 +60,9 @@ class TestBuildLayerConfig:
         ids=['console', 'file', 'default'],
     )
     def test_destination(
-        self, destination: Literal['console', 'file'] | None, expected_destination: _logger.LayerDestination
+        self,
+        destination: Literal['console', 'file'] | None,
+        expected_destination: _logger.LayerDestination,
     ) -> None:
         """Test the destination parameter."""
         config = _functions.build_layer_config(
@@ -239,7 +249,9 @@ class TestTracingHandler:
         """Test the handleError method of TracingHandler."""
         # Mock the rust function.
         mock_log_sink = mocker.patch(
-            'manul.logger.handler.log_sink', autospec=True, side_effect=Exception('test error')
+            'manul.logger.handler.log_sink',
+            autospec=True,
+            side_effect=Exception('test error'),
         )
         mock_handle_error = mocker.patch.object(TracingHandler, 'handleError', autospec=True)
         # Create handler.

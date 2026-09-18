@@ -10,7 +10,8 @@ ConfigT = TypeVar('ConfigT', bound=_logger.LayerConfig)
 def build_layer_config(
     name: str,
     filter_directive: str,
-    format: Literal['compact', 'pretty', 'json'] | None = None,
+    *,
+    format: Literal['compact', 'pretty', 'json'] | None = None,  # noqa: A002 -- mirrors the pyo3 LayerConfig kwarg
     destination: Literal['console', 'file'] | None = None,
     file_dir: str | None = None,
     file_prefix: str | None = None,
@@ -133,7 +134,7 @@ def log_sink(
     lineno: int,
     module_name: str,
     extra: dict | None = None,
-):
+) -> None:
     """Receive log messages from Python and forward them to Rust.
 
     Args:
