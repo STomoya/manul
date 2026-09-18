@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,15 +111,27 @@ class SpanContext:
     See `_current_spans` for why this doesn't use a real `tracing` span.
     """
 
-    __slots__ = ('_frame', '_token')
+    __slots__ = ('_frame', '_location', '_start', '_token')
 
+    _location: tuple[str, str, int, str]
+    _start: float
     _token: Token[tuple[_SpanFrame, ...]]
 
     def __init__(self, name: str, fields: dict) -> None:
         self._frame = _SpanFrame(name, fields)
+        # Attribute the close event to wherever `span(...)` was opened, same as
+        # `_log` does for direct trace/debug/info/warn/error calls.
+        caller = sys._getframe(2)
+        self._location = (
+            caller.f_code.co_filename,
+            caller.f_code.co_name,
+            caller.f_lineno,
+            Path(caller.f_code.co_filename).stem,
+        )
 
     def __enter__(self) -> Self:
         self._token = _current_spans.set((*_current_spans.get(), self._frame))
+        self._start = time.monotonic()
         return self
 
     def __exit__(
@@ -127,6 +140,17 @@ class SpanContext:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        duration_ms = (time.monotonic() - self._start) * 1000
+        filename, func_name, lineno, module_name = self._location
+        log_sink(
+            levelno=_LEVELS['debug'],
+            message=f'{self._frame.name} closed',
+            filename=filename,
+            func_name=func_name,
+            lineno=lineno,
+            module_name=module_name,
+            extra={'duration_ms': round(duration_ms, 3)},
+        )
         _current_spans.reset(self._token)
 
     async def __aenter__(self) -> Self:

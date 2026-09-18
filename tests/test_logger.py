@@ -187,7 +187,8 @@ class TestLogFunctions:
         with _functions.span('outer', request_id=1), _functions.span('inner', step='validate'):
             _functions.info('nested message')
 
-        mock_log_sink.assert_called_once_with(
+        # Two more calls follow: the inner and outer spans' own close-timing events.
+        mock_log_sink.assert_any_call(
             levelno=20,
             message='nested message',
             filename=__file__,
@@ -201,10 +202,48 @@ class TestLogFunctions:
             ],
             exception=None,
         )
+        expected_call_count = 3  # nested message + inner span close + outer span close
+        assert mock_log_sink.call_count == expected_call_count
 
 
 class TestSpan:
     """Tests for the span context manager."""
+
+    @pytest.fixture(autouse=True)
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function.
+
+        Autoused: span close now emits a timing event through it, so tests that
+        don't care about that event still shouldn't make real pyo3 calls.
+        """
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
+
+    def test_span_close_emits_debug_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that leaving a span logs a debug-level close event with a duration."""
+        with _functions.span('req', request_id=42):
+            pass
+
+        mock_log_sink.assert_called_once()
+        kwargs = mock_log_sink.call_args.kwargs
+        assert kwargs['levelno'] == _functions._LEVELS['debug']
+        assert kwargs['message'] == 'req closed'
+        assert kwargs['spans'] == [{'name': 'req', 'fields': {'request_id': 42}}]
+        assert isinstance(kwargs['extra']['duration_ms'], float)
+
+    def test_async_span_close_emits_debug_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that the timing close event also fires for `async with`."""
+
+        async def run() -> None:
+            async with _functions.span('job'):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+
+        mock_log_sink.assert_called_once()
+        kwargs = mock_log_sink.call_args.kwargs
+        assert kwargs['levelno'] == _functions._LEVELS['debug']
+        assert kwargs['message'] == 'job closed'
+        assert isinstance(kwargs['extra']['duration_ms'], float)
 
     def test_span_is_scoped_to_with_block(self) -> None:
         """Test that the span stack is empty before, populated during, and empty after."""
