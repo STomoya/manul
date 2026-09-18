@@ -10,6 +10,7 @@ def find_paths(
     keyword: str | None = None,
     path_type: Literal['file', 'directory', 'both', 'f', 'b'] | None = None,
     sort_strategy: Literal['none', 'standard', 'natural'] | None = None,
+    *,
     include_hidden: bool = False,
 ) -> list[str]:
     """Find paths matching a glob pattern with optional filtering and sorting."""

@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 __version__: str
 """The version of the manul_core module."""
 
@@ -35,7 +33,7 @@ def find_paths(
     path_type: PathType | None = None,
     sort_strategy: SortStrategy | None = None,
     include_hidden: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Find paths matching a glob pattern with optional filtering and sorting."""
 
 # endregion

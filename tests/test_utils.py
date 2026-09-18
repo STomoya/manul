@@ -1,18 +1,22 @@
 """Tests for manul utilities."""
 
-from typing import Literal
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
 
 import pytest
-from pytest_mock import MockerFixture
 
 from manul.utils import extract_structured, find_all_offsets, find_paths, match_any, replace_many, sub_optimized
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 
 class TestFindPaths:
     """Tests for the find_paths function."""
 
     @pytest.mark.parametrize(
-        'path_type, expected_enum_val',
+        ('path_type', 'expected_enum_val'),
         [
             ('file', 'file'),
             ('directory', 'directory'),
@@ -27,7 +31,7 @@ class TestFindPaths:
         mocker: MockerFixture,
         path_type: Literal['file', 'directory', 'both', 'f', 'b'] | None,
         expected_enum_val: Literal['file', 'directory', 'both', 'f', 'b'] | None,
-    ):
+    ) -> None:
         """Test that path_type string is correctly converted to PathType enum."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -40,15 +44,13 @@ class TestFindPaths:
         call_args = mock_core.find_paths.call_args[1]
         assert call_args['path_type'] == expected_enum_val
 
-    def test_unknown_path_type(self):
+    def test_unknown_path_type(self) -> None:
         """Test that an unknown path_type raises a ValueError."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Invalid PathType: unknown'):
             find_paths('*.txt', path_type='unknown')  # ty: ignore[invalid-argument-type]
 
-        assert str(exc_info.value) == 'Invalid PathType: unknown'
-
     @pytest.mark.parametrize(
-        'sort_strategy, expected_enum_val',
+        ('sort_strategy', 'expected_enum_val'),
         [
             ('none', 'none'),
             ('standard', 'standard'),
@@ -61,7 +63,7 @@ class TestFindPaths:
         mocker: MockerFixture,
         sort_strategy: Literal['none', 'standard', 'natural'] | None,
         expected_enum_val: Literal['none', 'standard', 'natural'] | None,
-    ):
+    ) -> None:
         """Test that sort_strategy string is correctly converted to SortStrategy enum."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -73,14 +75,12 @@ class TestFindPaths:
         call_args = mock_core.find_paths.call_args[1]
         assert call_args['sort_strategy'] == expected_enum_val
 
-    def test_unknown_sort_strategy(self):
+    def test_unknown_sort_strategy(self) -> None:
         """Test that an unknown sort_strategy raises a ValueError."""
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Invalid SortStrategy: unknown'):
             find_paths('*.txt', sort_strategy='unknown')  # ty: ignore[invalid-argument-type]
 
-        assert str(exc_info.value) == 'Invalid SortStrategy: unknown'
-
-    def test_find_paths_parameters(self, mocker: MockerFixture):
+    def test_find_paths_parameters(self, mocker: MockerFixture) -> None:
         """Test that all parameters are passed correctly to the core function."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -98,7 +98,7 @@ class TestFindPaths:
 class TestStringUtils:
     """Tests for the string utils."""
 
-    def test_find_all_offsets(self, mocker: MockerFixture):
+    def test_find_all_offsets(self, mocker: MockerFixture) -> None:
         """Test the find_all_offsets function."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -106,7 +106,7 @@ class TestStringUtils:
 
         mock_core.find_all_offsets.assert_called_once_with(text='test', pattern='test')
 
-    def test_match_any(self, mocker: MockerFixture):
+    def test_match_any(self, mocker: MockerFixture) -> None:
         """Test the match_any function."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -114,7 +114,7 @@ class TestStringUtils:
 
         mock_core.match_any.assert_called_once_with(text='test', patterns=['test'])
 
-    def test_replace_many(self, mocker: MockerFixture):
+    def test_replace_many(self, mocker: MockerFixture) -> None:
         """Test the replace_many function."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -122,7 +122,7 @@ class TestStringUtils:
 
         mock_core.replace_many.assert_called_once_with(text='test', replacements={'test': 'test'})
 
-    def test_sub_optimized(self, mocker: MockerFixture):
+    def test_sub_optimized(self, mocker: MockerFixture) -> None:
         """Test the sub_optimized function."""
         mock_core = mocker.patch('manul.utils._core')
 
@@ -130,7 +130,7 @@ class TestStringUtils:
 
         mock_core.sub_optimized.assert_called_once_with(text='test', pattern='test', replacement='test')
 
-    def test_extract_structured(self, mocker: MockerFixture):
+    def test_extract_structured(self, mocker: MockerFixture) -> None:
         """Test the extract_structured function."""
         mock_core = mocker.patch('manul.utils._core')
 

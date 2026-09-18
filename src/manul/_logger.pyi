@@ -55,7 +55,7 @@ class LayerConfig:
         self,
         name: str,
         filter_directive: str,
-        format: LogFormat = ...,
+        format: LogFormat = ...,  # noqa: A002 -- mirrors the pyo3 LayerConfig kwarg
         destination: LayerDestination = ...,
         file_dir: str | None = None,
         file_prefix: str | None = None,
