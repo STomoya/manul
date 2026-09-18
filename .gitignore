@@ -19,3 +19,7 @@ logs/
 
 reports/
 .coverage
+
+# superpowers related ignores (remove all including docs)
+docs/superpowers
+.superpowers
