@@ -77,6 +77,17 @@ class TestBuildLayerConfig:
         )
         assert config.destination == expected_destination
 
+    def test_max_log_files(self) -> None:
+        """Test that max_log_files is passed through to the LayerConfig."""
+        expected_max_log_files = 5
+        config = _functions.build_layer_config(
+            name='test',
+            filter_directive='trace',
+            destination='file',
+            max_log_files=expected_max_log_files,
+        )
+        assert config.max_log_files == expected_max_log_files
+
 
 class TestInitTracing:
     """Tests for the init_tracing function."""

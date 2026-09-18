@@ -4,6 +4,7 @@ use std::str::FromStr;
 use std::sync::Once;
 
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
     fmt::{
@@ -176,9 +177,11 @@ pub struct LayerConfig {
     pub file_dir: Option<String>,
     pub file_prefix: Option<String>,
     pub include_span_events: bool,
+    pub max_log_files: Option<usize>,
 }
 
 impl LayerConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: String,
         filter_directive: String,
@@ -187,6 +190,7 @@ impl LayerConfig {
         file_dir: Option<String>,
         file_prefix: Option<String>,
         include_span_events: bool,
+        max_log_files: Option<usize>,
     ) -> Self {
         Self {
             name,
@@ -196,6 +200,7 @@ impl LayerConfig {
             file_dir,
             file_prefix,
             include_span_events,
+            max_log_files,
         }
     }
 }
@@ -285,7 +290,15 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>)
                 .clone()
                 .unwrap_or_else(|| "app".to_string());
 
-            let file_appender = tracing_appender::rolling::daily(dir, prefix);
+            let mut builder = RollingFileAppender::builder()
+                .rotation(Rotation::DAILY)
+                .filename_prefix(prefix);
+            if let Some(max_log_files) = config.max_log_files {
+                builder = builder.max_log_files(max_log_files);
+            }
+            let file_appender = builder
+                .build(dir)
+                .expect("initializing rolling file appender failed");
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let writer = make_box_writer(non_blocking, config.format);
@@ -494,6 +507,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
             );
             let (_layer, guard) = build_layer_internal(&config);
             assert!(guard.is_none());
@@ -510,9 +524,32 @@ mod tests {
             Some("./logs".to_string()),
             Some("test_app".to_string()),
             true,
+            None,
         );
         let (_layer, guard) = build_layer_internal(&config);
         assert!(guard.is_some());
+    }
+
+    #[test]
+    fn test_build_layer_internal_file_with_max_log_files_cap() {
+        let dir = std::env::temp_dir().join(format!(
+            "manul_logger_test_max_log_files_{}",
+            std::process::id()
+        ));
+        let config = LayerConfig::new(
+            "file_layer".to_string(),
+            "debug".to_string(),
+            LogFormat::Json,
+            LayerDestination::File,
+            Some(dir.to_string_lossy().into_owned()),
+            Some("test_app".to_string()),
+            false,
+            Some(2),
+        );
+        let (_layer, guard) = build_layer_internal(&config);
+        assert!(guard.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn get_log_level_and_names() -> Vec<(u8, String)> {

@@ -43,6 +43,7 @@ def build_layer_config(
     file_dir: str | None = None,
     file_prefix: str | None = None,
     include_span_events: bool = False,
+    max_log_files: int | None = None,
 ) -> _logger.LayerConfig:
     """Build a layer configuration.
 
@@ -57,6 +58,8 @@ def build_layer_config(
         file_prefix (str | None, optional): Filename prefix for rolling logs. If None, defaults to "app".
             Defaults to None.
         include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
+        max_log_files (int | None, optional): Cap on rotated log files to retain (oldest pruned first). None
+            keeps every file. Defaults to None.
 
     Returns:
         _logger.LayerConfig: The layer configuration.
@@ -73,6 +76,7 @@ def build_layer_config(
         file_dir=file_dir,
         file_prefix=file_prefix,
         include_span_events=include_span_events,
+        max_log_files=max_log_files,
     )
 
 

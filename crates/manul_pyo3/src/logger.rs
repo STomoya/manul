@@ -130,6 +130,8 @@ pub struct PyLayerConfig {
     pub file_prefix: Option<String>,
     #[pyo3(get, set)]
     pub include_span_events: bool,
+    #[pyo3(get, set)]
+    pub max_log_files: Option<usize>,
 }
 
 impl From<&PyLayerConfig> for LayerConfig {
@@ -142,6 +144,7 @@ impl From<&PyLayerConfig> for LayerConfig {
             value.file_dir.clone(),
             value.file_prefix.clone(),
             value.include_span_events,
+            value.max_log_files,
         )
     }
 }
@@ -149,7 +152,8 @@ impl From<&PyLayerConfig> for LayerConfig {
 #[pymethods]
 impl PyLayerConfig {
     #[new]
-    #[pyo3(signature = (name, filter_directive, format=PyLogFormat::Compact, destination=PyLayerDestination::Console, file_dir=None, file_prefix=None, include_span_events=false))]
+    #[pyo3(signature = (name, filter_directive, format=PyLogFormat::Compact, destination=PyLayerDestination::Console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None))]
+    #[allow(clippy::too_many_arguments)]
     fn py_new(
         name: String,
         filter_directive: String,
@@ -158,6 +162,7 @@ impl PyLayerConfig {
         file_dir: Option<String>,
         file_prefix: Option<String>,
         include_span_events: bool,
+        max_log_files: Option<usize>,
     ) -> Self {
         Self {
             name,
@@ -167,12 +172,13 @@ impl PyLayerConfig {
             file_dir,
             file_prefix,
             include_span_events,
+            max_log_files,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "LayerConfig(name={}, filter_directive={}, format={}, destination={}, file_dir={}, file_prefix={}, include_span_events={})",
+            "LayerConfig(name={}, filter_directive={}, format={}, destination={}, file_dir={}, file_prefix={}, include_span_events={}, max_log_files={})",
             self.name,
             self.filter_directive,
             self.format.__str__(),
@@ -187,7 +193,12 @@ impl PyLayerConfig {
             } else {
                 "None".to_string()
             },
-            self.include_span_events
+            self.include_span_events,
+            if let Some(n) = self.max_log_files {
+                n.to_string()
+            } else {
+                "None".to_string()
+            }
         )
     }
 }
@@ -360,10 +371,11 @@ mod tests {
             None,
             None,
             false,
+            None,
         );
         assert_eq!(
             config.__repr__(),
-            "LayerConfig(name=test_layer, filter_directive=info, format=compact, destination=console, file_dir=None, file_prefix=None, include_span_events=false)"
+            "LayerConfig(name=test_layer, filter_directive=info, format=compact, destination=console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None)"
         );
 
         let core_config = LayerConfig::from(&config);
@@ -381,10 +393,11 @@ mod tests {
             Some("./logs".to_string()),
             Some("app".to_string()),
             true,
+            Some(3),
         );
         assert_eq!(
             config.__repr__(),
-            "LayerConfig(name=file_layer, filter_directive=debug, format=json, destination=file, file_dir=./logs, file_prefix=app, include_span_events=true)"
+            "LayerConfig(name=file_layer, filter_directive=debug, format=json, destination=file, file_dir=./logs, file_prefix=app, include_span_events=true, max_log_files=3)"
         );
     }
 
@@ -437,6 +450,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         );
         let result = init_tracing(vec![config]);
         assert!(result.is_ok());

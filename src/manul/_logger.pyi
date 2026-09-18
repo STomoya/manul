@@ -50,6 +50,9 @@ class LayerConfig:
     include_span_events: bool
     """Whether to include span events (enter/exit) in the logs."""
 
+    max_log_files: int | None
+    """The maximum number of rotated log files to keep, if the destination is a file."""
+
     def __init__(
         self,
         name: str,
@@ -59,6 +62,7 @@ class LayerConfig:
         file_dir: str | None = None,
         file_prefix: str | None = None,
         include_span_events: bool = False,
+        max_log_files: int | None = None,
     ) -> None:
         """Create a new LayerConfig.
 
@@ -70,6 +74,8 @@ class LayerConfig:
             file_dir (str | None, optional): Directory for logs (required if destination is File). Defaults to None.
             file_prefix (str | None, optional): Filename prefix for rolling logs. Defaults to None.
             include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
+            max_log_files (int | None, optional): Cap on rotated log files to retain (oldest pruned first).
+                None keeps every file. Defaults to None.
 
         """
 
