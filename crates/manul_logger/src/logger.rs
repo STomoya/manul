@@ -241,46 +241,25 @@ fn build_fmt_layer(
 }
 
 macro_rules! dispatch_log {
-    ($level:expr, $msg:expr, $location:expr, $extra:expr) => {
-        match ($location, $extra) {
-            (Some(loc), Some(e)) => {
-                match $level {
-                    0..=9 => tracing::trace!(location = %loc, extra = %e, "{}", $msg),
-                    10..=19 => tracing::debug!(location = %loc, extra = %e, "{}", $msg),
-                    20..=29 => tracing::info!(location = %loc, extra = %e, "{}", $msg),
-                    30..=39 => tracing::warn!(location = %loc, extra = %e, "{}", $msg),
-                    _ => tracing::error!(location = %loc, extra = %e, "{}", $msg),
+    ($level:expr, $msg:expr, $location:expr, $extra:expr) => {{
+        macro_rules! emit {
+            ($lvl:ident) => {
+                match ($location, $extra) {
+                    (Some(loc), Some(e)) => tracing::$lvl!(location = %loc, extra = %e, "{}", $msg),
+                    (Some(loc), None) => tracing::$lvl!(location = %loc, "{}", $msg),
+                    (None, Some(e)) => tracing::$lvl!(extra = %e, "{}", $msg),
+                    (None, None) => tracing::$lvl!("{}", $msg),
                 }
-            }
-            (Some(loc), None) => {
-                match $level {
-                    0..=9 => tracing::trace!(location = %loc, "{}", $msg),
-                    10..=19 => tracing::debug!(location = %loc, "{}", $msg),
-                    20..=29 => tracing::info!(location = %loc, "{}", $msg),
-                    30..=39 => tracing::warn!(location = %loc, "{}", $msg),
-                    _ => tracing::error!(location = %loc, "{}", $msg),
-                }
-            }
-            (None, Some(e)) => {
-                match $level {
-                    0..=9 => tracing::trace!(extra = %e, "{}", $msg),
-                    10..=19 => tracing::debug!(extra = %e, "{}", $msg),
-                    20..=29 => tracing::info!(extra = %e, "{}", $msg),
-                    30..=39 => tracing::warn!(extra = %e, "{}", $msg),
-                    _ => tracing::error!(extra = %e, "{}", $msg),
-                }
-            }
-            (None, None) => {
-                match $level {
-                    0..=9 => tracing::trace!("{}", $msg),
-                    10..=19 => tracing::debug!("{}", $msg),
-                    20..=29 => tracing::info!("{}", $msg),
-                    30..=39 => tracing::warn!("{}", $msg),
-                    _ => tracing::error!("{}", $msg),
-                }
-            }
+            };
         }
-    };
+        match $level {
+            0..=9 => emit!(trace),
+            10..=19 => emit!(debug),
+            20..=29 => emit!(info),
+            30..=39 => emit!(warn),
+            _ => emit!(error),
+        }
+    }};
 }
 
 /// Dispatches a single log line to `tracing`, given already-formatted metadata.
