@@ -218,6 +218,7 @@ fn dict_to_string(extras: Bound<'_, PyDict>) -> String {
     parts.join(", ")
 }
 
+/// Log an info-level message.
 #[pyfunction(name = "info")]
 #[pyo3(signature = (message, extra=None))]
 pub fn info(message: &str, extra: Option<Bound<'_, PyDict>>) {
@@ -225,6 +226,7 @@ pub fn info(message: &str, extra: Option<Bound<'_, PyDict>>) {
     log_sink(20, message, None, None, None, None, extra_str.as_deref());
 }
 
+/// Log a warning-level message.
 #[pyfunction(name = "warn")]
 #[pyo3(signature = (message, extra=None))]
 pub fn warn(message: &str, extra: Option<Bound<'_, PyDict>>) {
@@ -232,6 +234,7 @@ pub fn warn(message: &str, extra: Option<Bound<'_, PyDict>>) {
     log_sink(30, message, None, None, None, None, extra_str.as_deref());
 }
 
+/// Log an error-level message.
 #[pyfunction(name = "error")]
 #[pyo3(signature = (message, extra=None))]
 pub fn error(message: &str, extra: Option<Bound<'_, PyDict>>) {
@@ -239,6 +242,7 @@ pub fn error(message: &str, extra: Option<Bound<'_, PyDict>>) {
     log_sink(40, message, None, None, None, None, extra_str.as_deref());
 }
 
+/// Log a debug-level message.
 #[pyfunction(name = "debug")]
 #[pyo3(signature = (message, extra=None))]
 pub fn debug(message: &str, extra: Option<Bound<'_, PyDict>>) {
@@ -246,6 +250,7 @@ pub fn debug(message: &str, extra: Option<Bound<'_, PyDict>>) {
     log_sink(10, message, None, None, None, None, extra_str.as_deref());
 }
 
+/// Log a trace-level message.
 #[pyfunction(name = "trace")]
 #[pyo3(signature = (message, extra=None))]
 pub fn trace(message: &str, extra: Option<Bound<'_, PyDict>>) {

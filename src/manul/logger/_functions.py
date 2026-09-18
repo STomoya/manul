@@ -1,10 +1,30 @@
 """Logger."""
 
-from typing import Any, Literal, TypeVar
+from __future__ import annotations
 
-from manul._manul import _logger  # ty: ignore[unresolved-import]
+from typing import TYPE_CHECKING, Literal, TypeVar
 
-ConfigT = TypeVar('ConfigT', bound=_logger.LayerConfig)
+from manul._manul import _logger
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+_T = TypeVar('_T')
+
+
+def _resolve_enum(value: str | None, enum_cls: Callable[[str], _T], default: _T) -> _T:
+    """Resolve a string option into a pyo3 enum member, falling back to a default.
+
+    Args:
+        value (str | None): The raw string option, or None to use the default.
+        enum_cls (Callable[[str], _T]): The pyo3 enum class to construct from `value`.
+        default (_T): The enum member to use when `value` is None.
+
+    Returns:
+        _T: The resolved enum member.
+
+    """
+    return enum_cls(value.lower()) if value is not None else default
 
 
 def build_layer_config(
@@ -16,7 +36,7 @@ def build_layer_config(
     file_dir: str | None = None,
     file_prefix: str | None = None,
     include_span_events: bool = False,
-) -> ConfigT:
+) -> _logger.LayerConfig:
     """Build a layer configuration.
 
     Args:
@@ -32,20 +52,11 @@ def build_layer_config(
         include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
 
     Returns:
-        ConfigT: The layer configuration.
+        _logger.LayerConfig: The layer configuration.
 
     """
-    if isinstance(format, str):
-        format_enum = format.lower()
-        format_enum = _logger.LogFormat(format_enum)
-    elif format is None:
-        format_enum = _logger.LogFormat.Compact
-
-    if isinstance(destination, str):
-        destination_enum = destination.lower()
-        destination_enum = _logger.LayerDestination(destination_enum)
-    elif destination is None:
-        destination_enum = _logger.LayerDestination.Console
+    format_enum = _resolve_enum(format, _logger.LogFormat, _logger.LogFormat.Compact)
+    destination_enum = _resolve_enum(destination, _logger.LayerDestination, _logger.LayerDestination.Console)
 
     return _logger.LayerConfig(
         name=name,
@@ -58,11 +69,11 @@ def build_layer_config(
     )
 
 
-def init_tracing(layers: list[ConfigT]) -> _logger.TracingGuard:
+def init_tracing(layers: list[_logger.LayerConfig]) -> _logger.TracingGuard:
     """Initialize the tracing system.
 
     Args:
-        layers (list[ConfigT]): A list of layer configurations.
+        layers (list[_logger.LayerConfig]): A list of layer configurations.
 
     Returns:
         _logger.TracingGuard:
@@ -71,59 +82,11 @@ def init_tracing(layers: list[ConfigT]) -> _logger.TracingGuard:
     return _logger.init_tracing(layers)
 
 
-def info(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Info level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.info(message=message, extra=extra)
-
-
-def debug(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Debug level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.debug(message=message, extra=extra)
-
-
-def warn(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Warn level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.warn(message=message, extra=extra)
-
-
-def error(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Error level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.error(message=message, extra=extra)
-
-
-def trace(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Trace level log.
-
-    Args:
-        message (str): Message to log.
-        extra (dict[str, Any]): Extra data to log.
-
-    """
-    _logger.trace(message=message, extra=extra)
+debug = _logger.debug
+error = _logger.error
+info = _logger.info
+trace = _logger.trace
+warn = _logger.warn
 
 
 def log_sink(

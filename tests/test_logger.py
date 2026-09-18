@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from manul._manul import _logger  # ty: ignore[unresolved-import]
+from manul._manul import _logger
 from manul.logger import _functions
 from manul.logger.handler import TracingHandler
 
@@ -111,7 +111,8 @@ class TestLogFunctions:
 
         def factory(level: str) -> MockType:
             """Create a mock for the specified log level."""
-            return mocker.patch(f'manul._manul._logger.{level}', autospec=True)
+            target = _functions if hasattr(_functions, level) else _logger
+            return mocker.patch.object(target, level, autospec=True)
 
         return factory
 
@@ -120,7 +121,7 @@ class TestLogFunctions:
         mock_log = mock_log_fn('info')
         _functions.info('test info message', extra={'key': 'value'})
         mock_log.assert_called_once_with(
-            message='test info message',
+            'test info message',
             extra={'key': 'value'},
         )
 
@@ -129,7 +130,7 @@ class TestLogFunctions:
         mock_log = mock_log_fn('debug')
         _functions.debug('test debug message', extra={'key': 'value'})
         mock_log.assert_called_once_with(
-            message='test debug message',
+            'test debug message',
             extra={'key': 'value'},
         )
 
@@ -138,7 +139,7 @@ class TestLogFunctions:
         mock_log = mock_log_fn('warn')
         _functions.warn('test warn message', extra={'key': 'value'})
         mock_log.assert_called_once_with(
-            message='test warn message',
+            'test warn message',
             extra={'key': 'value'},
         )
 
@@ -147,7 +148,7 @@ class TestLogFunctions:
         mock_log = mock_log_fn('error')
         _functions.error('test error message', extra={'key': 'value'})
         mock_log.assert_called_once_with(
-            message='test error message',
+            'test error message',
             extra={'key': 'value'},
         )
 
@@ -156,7 +157,7 @@ class TestLogFunctions:
         mock_log = mock_log_fn('trace')
         _functions.trace('test trace message', extra={'key': 'value'})
         mock_log.assert_called_once_with(
-            message='test trace message',
+            'test trace message',
             extra={'key': 'value'},
         )
 
