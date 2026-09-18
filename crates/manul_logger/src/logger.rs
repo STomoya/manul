@@ -1,15 +1,83 @@
+use std::cell::RefCell;
+use std::io;
 use std::str::FromStr;
 use std::sync::Once;
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
-    fmt::{self, format::FmtSpan, writer::BoxMakeWriter},
+    fmt::{
+        self,
+        format::FmtSpan,
+        writer::{BoxMakeWriter, MakeWriter},
+    },
     layer::SubscriberExt,
     util::SubscriberInitExt,
 };
 
 static INIT: Once = Once::new();
+
+thread_local! {
+    /// Holds the structured `attributes` payload for the log call currently being
+    /// dispatched, so `AttributeInjectingWriter` can merge it into JSON output without
+    /// routing it through `tracing`'s static field system (see `log_sink`).
+    static CURRENT_ATTRIBUTES: RefCell<Option<serde_json::Value>> = const { RefCell::new(None) };
+}
+
+/// A `MakeWriter` that wraps another one, splicing `CURRENT_ATTRIBUTES` into each
+/// formatted JSON line as it's written, replacing the stringified `extra` field.
+#[derive(Clone)]
+struct AttributeInjectingMakeWriter<M> {
+    inner: M,
+}
+
+impl<'a, M> MakeWriter<'a> for AttributeInjectingMakeWriter<M>
+where
+    M: MakeWriter<'a>,
+{
+    type Writer = AttributeInjectingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        AttributeInjectingWriter {
+            inner: self.inner.make_writer(),
+        }
+    }
+}
+
+struct AttributeInjectingWriter<W> {
+    inner: W,
+}
+
+impl<W: io::Write> io::Write for AttributeInjectingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match inject_attributes(buf) {
+            Some(merged) => {
+                self.inner.write_all(&merged)?;
+                Ok(buf.len())
+            }
+            None => self.inner.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// Merges the pending `CURRENT_ATTRIBUTES` value into a formatted JSON log line,
+/// dropping the stringified `extra` field in favor of a typed `attributes` field.
+/// Returns `None` (leaving `buf` untouched) when there's nothing pending, or `buf`
+/// isn't a JSON object (e.g. it's the bare `\n` `fmt` sometimes writes separately).
+fn inject_attributes(buf: &[u8]) -> Option<Vec<u8>> {
+    let attributes = CURRENT_ATTRIBUTES.with(|cell| cell.borrow().clone())?;
+    let mut value: serde_json::Value = serde_json::from_slice(buf).ok()?;
+    let object = value.as_object_mut()?;
+    object.remove("extra");
+    object.insert("attributes".to_string(), attributes);
+    let mut out = serde_json::to_vec(&value).ok()?;
+    out.push(b'\n');
+    Some(out)
+}
 
 /// The output format of the logs.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -175,7 +243,7 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>)
 
     match config.destination {
         LayerDestination::Console => {
-            let writer = BoxMakeWriter::new(std::io::stdout);
+            let writer = make_box_writer(std::io::stdout, config.format);
             let layer = build_fmt_layer(writer, config.format, span_events, true)
                 .with_filter(env_filter)
                 .boxed();
@@ -194,12 +262,25 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>)
             let file_appender = tracing_appender::rolling::daily(dir, prefix);
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-            let writer = BoxMakeWriter::new(non_blocking);
+            let writer = make_box_writer(non_blocking, config.format);
             let layer = build_fmt_layer(writer, config.format, span_events, false)
                 .with_filter(env_filter)
                 .boxed();
             (layer, Some(guard))
         }
+    }
+}
+
+/// Wraps `make_writer` with `AttributeInjectingMakeWriter` for the JSON format only —
+/// Compact/Pretty keep writing the stringified `extra` field as-is.
+fn make_box_writer<M>(make_writer: M, format: LogFormat) -> BoxMakeWriter
+where
+    M: for<'a> MakeWriter<'a> + Send + Sync + 'static,
+{
+    if format == LogFormat::Json {
+        BoxMakeWriter::new(AttributeInjectingMakeWriter { inner: make_writer })
+    } else {
+        BoxMakeWriter::new(make_writer)
     }
 }
 
@@ -263,6 +344,12 @@ macro_rules! dispatch_log {
 }
 
 /// Dispatches a single log line to `tracing`, given already-formatted metadata.
+///
+/// `attributes`, when set, is handed to JSON-format layers as a typed nested object
+/// (see `AttributeInjectingWriter`) instead of going through `extra`'s stringified form.
+// Each argument mirrors one independent field of Python's `LogRecord`; there's no
+// natural subgrouping that wouldn't just be a struct wrapping this same fixed list.
+#[allow(clippy::too_many_arguments)]
 pub fn log_sink(
     levelno: u8,
     message: &str,
@@ -271,6 +358,7 @@ pub fn log_sink(
     lineno: Option<usize>,
     module_name: Option<String>,
     extra: Option<&str>,
+    attributes: Option<serde_json::Value>,
 ) {
     let location_str = if let Some(ref f) = filename {
         Some(format!(
@@ -291,12 +379,19 @@ pub fn log_sink(
         None
     };
 
+    if attributes.is_some() {
+        CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = attributes);
+    }
+
     dispatch_log!(levelno, message, location_str, extra);
+
+    CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
     use tracing_test::traced_test;
 
     #[test]
@@ -397,6 +492,7 @@ mod tests {
                 Some(42),
                 Some("test_module".to_string()),
                 Some("test=data"),
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -418,6 +514,7 @@ mod tests {
                 Some(42),
                 Some("test_module".to_string()),
                 Some("test=data"),
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -439,6 +536,7 @@ mod tests {
                 None,
                 None,
                 Some("test=data"),
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -460,6 +558,7 @@ mod tests {
                 Some(42),
                 Some("test_module".to_string()),
                 None,
+                None,
             );
 
             assert!(logs_contain(&name));
@@ -473,12 +572,111 @@ mod tests {
     #[traced_test]
     fn test_log_sink_no_details() {
         for (level, name) in get_log_level_and_names() {
-            log_sink(level, "test message", None, None, None, None, None);
+            log_sink(level, "test message", None, None, None, None, None, None);
 
             assert!(logs_contain(&name));
             assert!(logs_contain("test message"));
             assert!(!logs_contain("location="));
             assert!(!logs_contain("extra="));
         }
+    }
+
+    #[test]
+    fn test_inject_attributes_merges_typed_value_and_drops_extra() {
+        CURRENT_ATTRIBUTES.with(|cell| {
+            *cell.borrow_mut() = Some(serde_json::json!({"user_id": 42, "flag": true}));
+        });
+
+        let input = br#"{"level":"INFO","message":"hi","extra":"user_id=42, flag=true"}
+"#;
+        let merged = inject_attributes(input).expect("attributes were pending");
+        let value: serde_json::Value = serde_json::from_slice(&merged).unwrap();
+
+        assert_eq!(value["message"], "hi");
+        assert_eq!(value["attributes"]["user_id"], 42);
+        assert_eq!(value["attributes"]["flag"], true);
+        assert!(value.get("extra").is_none());
+
+        CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_inject_attributes_passthrough_when_nothing_pending() {
+        CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
+        assert!(inject_attributes(b"{\"message\":\"hi\"}\n").is_none());
+    }
+
+    #[test]
+    fn test_inject_attributes_passthrough_on_non_json_buf() {
+        CURRENT_ATTRIBUTES.with(|cell| {
+            *cell.borrow_mut() = Some(serde_json::json!({"a": 1}));
+        });
+        assert!(inject_attributes(b"not json\n").is_none());
+        CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_attribute_injecting_writer_delegates_when_nothing_pending() {
+        CURRENT_ATTRIBUTES.with(|cell| *cell.borrow_mut() = None);
+        let mut out = Vec::new();
+        let mut writer = AttributeInjectingWriter { inner: &mut out };
+        writer.write_all(b"{\"message\":\"hi\"}\n").unwrap();
+        assert_eq!(out, b"{\"message\":\"hi\"}\n");
+    }
+
+    #[test]
+    fn test_json_layer_emits_typed_attributes_and_compact_layer_is_unaffected() {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let json_buf = SharedBuf::default();
+        let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+
+        let compact_buf = SharedBuf::default();
+        let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
+        let compact_layer =
+            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+
+        let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        log_sink(
+            20,
+            "hi",
+            None,
+            None,
+            None,
+            None,
+            Some("user_id=42"),
+            Some(serde_json::json!({"user_id": 42})),
+        );
+
+        let json_output = String::from_utf8(json_buf.0.lock().unwrap().clone()).unwrap();
+        let json_value: serde_json::Value = serde_json::from_str(json_output.trim()).unwrap();
+        assert_eq!(json_value["attributes"]["user_id"], 42);
+        assert!(json_value.get("extra").is_none());
+
+        let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
+        assert!(compact_output.contains("extra=user_id=42"));
     }
 }

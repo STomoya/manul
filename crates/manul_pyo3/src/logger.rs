@@ -3,7 +3,7 @@ use manul_logger::logger::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use std::str::FromStr;
 
 #[pymodule(name = "_logger")]
@@ -210,52 +210,134 @@ pub fn init_tracing(layers: Vec<PyLayerConfig>) -> PyResult<PyTracingGuard> {
 }
 
 /// Converts a Python dictionary into a human-readable string: "key=val, key1=val1"
-fn dict_to_string(extras: Bound<'_, PyDict>) -> String {
+fn dict_to_string(extras: &Bound<'_, PyDict>) -> String {
     let mut parts = Vec::new();
-    for (key, value) in extras {
+    for (key, value) in extras.iter() {
         parts.push(format!("{}={}", key, value));
     }
     parts.join(", ")
+}
+
+/// Converts a Python dictionary into a `serde_json::Value`, preserving each value's
+/// native type instead of stringifying it, for `LayerConfig`'s JSON destination.
+fn dict_to_json(extras: &Bound<'_, PyDict>) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for (key, value) in extras.iter() {
+        map.insert(key.to_string(), py_to_json(&value));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Converts a single Python value into a `serde_json::Value`, recursing into lists and
+/// dicts. Anything not natively JSON-representable falls back to its `str()` form.
+fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
+    if let Ok(v) = value.extract::<bool>() {
+        serde_json::Value::Bool(v)
+    } else if let Ok(v) = value.extract::<i64>() {
+        serde_json::Value::from(v)
+    } else if let Ok(v) = value.extract::<f64>() {
+        serde_json::Value::from(v)
+    } else if let Ok(v) = value.extract::<String>() {
+        serde_json::Value::from(v)
+    } else if value.is_none() {
+        serde_json::Value::Null
+    } else if let Ok(list) = value.cast::<PyList>() {
+        serde_json::Value::Array(list.iter().map(|item| py_to_json(&item)).collect())
+    } else if let Ok(dict) = value.cast::<PyDict>() {
+        dict_to_json(dict)
+    } else {
+        serde_json::Value::from(value.to_string())
+    }
 }
 
 /// Log an info-level message.
 #[pyfunction(name = "info")]
 #[pyo3(signature = (message, extra=None))]
 pub fn info(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.map(dict_to_string);
-    log_sink(20, message, None, None, None, None, extra_str.as_deref());
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
+    log_sink(
+        20,
+        message,
+        None,
+        None,
+        None,
+        None,
+        extra_str.as_deref(),
+        attributes,
+    );
 }
 
 /// Log a warning-level message.
 #[pyfunction(name = "warn")]
 #[pyo3(signature = (message, extra=None))]
 pub fn warn(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.map(dict_to_string);
-    log_sink(30, message, None, None, None, None, extra_str.as_deref());
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
+    log_sink(
+        30,
+        message,
+        None,
+        None,
+        None,
+        None,
+        extra_str.as_deref(),
+        attributes,
+    );
 }
 
 /// Log an error-level message.
 #[pyfunction(name = "error")]
 #[pyo3(signature = (message, extra=None))]
 pub fn error(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.map(dict_to_string);
-    log_sink(40, message, None, None, None, None, extra_str.as_deref());
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
+    log_sink(
+        40,
+        message,
+        None,
+        None,
+        None,
+        None,
+        extra_str.as_deref(),
+        attributes,
+    );
 }
 
 /// Log a debug-level message.
 #[pyfunction(name = "debug")]
 #[pyo3(signature = (message, extra=None))]
 pub fn debug(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.map(dict_to_string);
-    log_sink(10, message, None, None, None, None, extra_str.as_deref());
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
+    log_sink(
+        10,
+        message,
+        None,
+        None,
+        None,
+        None,
+        extra_str.as_deref(),
+        attributes,
+    );
 }
 
 /// Log a trace-level message.
 #[pyfunction(name = "trace")]
 #[pyo3(signature = (message, extra=None))]
 pub fn trace(message: &str, extra: Option<Bound<'_, PyDict>>) {
-    let extra_str = extra.map(dict_to_string);
-    log_sink(0, message, None, None, None, None, extra_str.as_deref());
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
+    log_sink(
+        0,
+        message,
+        None,
+        None,
+        None,
+        None,
+        extra_str.as_deref(),
+        attributes,
+    );
 }
 
 #[pyfunction(name = "_log_sink")]
@@ -269,7 +351,8 @@ pub fn _log_sink(
     module_name: Option<String>,
     extra: Option<Bound<'_, PyDict>>,
 ) {
-    let extra_str = extra.map(dict_to_string);
+    let extra_str = extra.as_ref().map(dict_to_string);
+    let attributes = extra.as_ref().map(dict_to_json);
     log_sink(
         levelno,
         message,
@@ -278,6 +361,7 @@ pub fn _log_sink(
         lineno,
         module_name,
         extra_str.as_deref(),
+        attributes,
     );
 }
 
@@ -361,8 +445,35 @@ mod tests {
         Python::attach(|py| {
             let dict = PyDict::new(py);
             dict.set_item("key1", "value1").unwrap();
-            let result = dict_to_string(dict);
+            let result = dict_to_string(&dict);
             assert_eq!(result, "key1=value1");
+        });
+    }
+
+    #[test]
+    fn test_dict_to_json_preserves_native_types() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("count", 42i64).unwrap();
+            dict.set_item("ratio", 1.5f64).unwrap();
+            dict.set_item("enabled", true).unwrap();
+            dict.set_item("name", "bob").unwrap();
+            dict.set_item("nothing", py.None()).unwrap();
+            dict.set_item("tags", vec!["a", "b"]).unwrap();
+
+            let nested = PyDict::new(py);
+            nested.set_item("inner", 1i64).unwrap();
+            dict.set_item("nested", &nested).unwrap();
+
+            let value = dict_to_json(&dict);
+            assert_eq!(value["count"], serde_json::json!(42));
+            assert_eq!(value["ratio"], serde_json::json!(1.5));
+            assert_eq!(value["enabled"], serde_json::json!(true));
+            assert_eq!(value["name"], serde_json::json!("bob"));
+            assert_eq!(value["nothing"], serde_json::Value::Null);
+            assert_eq!(value["tags"], serde_json::json!(["a", "b"]));
+            assert_eq!(value["nested"], serde_json::json!({"inner": 1}));
         });
     }
 
