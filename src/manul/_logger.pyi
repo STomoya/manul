@@ -53,6 +53,9 @@ class LayerConfig:
     max_log_files: int | None
     """The maximum number of rotated log files to keep, if the destination is a file."""
 
+    sample_directive: str | None
+    """`"<span_name>:<level>:<n>"`: within `span_name`, keep 1 in every `n` events at `level`."""
+
     def __init__(
         self,
         name: str,
@@ -63,6 +66,7 @@ class LayerConfig:
         file_prefix: str | None = None,
         include_span_events: bool = False,
         max_log_files: int | None = None,
+        sample_directive: str | None = None,
     ) -> None:
         """Create a new LayerConfig.
 
@@ -76,6 +80,10 @@ class LayerConfig:
             include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
             max_log_files (int | None, optional): Cap on rotated log files to retain (oldest pruned first).
                 None keeps every file. Defaults to None.
+            sample_directive (str | None, optional): `"<span_name>:<level>:<n>"` -- while `span_name` is
+                open, keep 1 in every `n` events at `level` on this layer and drop the rest. Events at
+                other levels, or outside that span, are unaffected. None disables sampling. Defaults to
+                None.
 
         """
 

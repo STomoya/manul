@@ -2,12 +2,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, Once, OnceLock};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     EnvFilter, Layer, Registry,
+    filter::{FilterExt, dynamic_filter_fn},
     fmt::{
         self,
         format::FmtSpan,
@@ -188,6 +190,7 @@ pub struct LayerConfig {
     pub file_prefix: Option<String>,
     pub include_span_events: bool,
     pub max_log_files: Option<usize>,
+    pub sample_directive: Option<String>,
 }
 
 impl LayerConfig {
@@ -201,6 +204,7 @@ impl LayerConfig {
         file_prefix: Option<String>,
         include_span_events: bool,
         max_log_files: Option<usize>,
+        sample_directive: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -211,6 +215,7 @@ impl LayerConfig {
             file_prefix,
             include_span_events,
             max_log_files,
+            sample_directive,
         }
     }
 }
@@ -277,6 +282,94 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
     Ok(TracingGuards { guards })
 }
 
+/// Decimates events for one level within one currently-open named span, so a
+/// hot/noisy call site can be thinned out without affecting unrelated events
+/// at the same level. The span stack it reads is `CURRENT_SPANS`, whose JSON
+/// shape comes from `manul.logger._functions._current_spans_payload` -- keep
+/// the `"name"` key in sync with that function if it ever changes.
+struct Sampler {
+    span_name: String,
+    level: tracing::Level,
+    n: usize,
+    counter: AtomicUsize,
+}
+
+impl Sampler {
+    fn new(directive: &str) -> Self {
+        let (span_name, level, n) = parse_sample_directive(directive);
+        Self {
+            span_name,
+            level,
+            n,
+            counter: AtomicUsize::new(0),
+        }
+    }
+
+    fn should_emit(&self, level: &tracing::Level) -> bool {
+        if level != &self.level {
+            return true;
+        }
+        let in_scope = CURRENT_SPANS.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .and_then(|value| value.as_array())
+                .is_some_and(|frames| {
+                    frames.iter().any(|frame| {
+                        frame.get("name").and_then(|name| name.as_str())
+                            == Some(self.span_name.as_str())
+                    })
+                })
+        });
+        if !in_scope {
+            return true;
+        }
+        self.counter
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(self.n)
+    }
+}
+
+/// Parses a `"<span_name>:<level>:<n>"` sample directive. Panics on malformed
+/// input, matching `EnvFilter::new`'s own panic-on-bad-syntax behavior for
+/// `filter_directive` -- this is programmer-set config, not user input.
+fn parse_sample_directive(directive: &str) -> (String, tracing::Level, usize) {
+    let parts: Vec<&str> = directive.splitn(3, ':').collect();
+    let [span_name, level, n] = parts[..] else {
+        panic!("Invalid sample directive \"{directive}\": expected \"<span_name>:<level>:<n>\"");
+    };
+    let level: tracing::Level = level.parse().unwrap_or_else(|_| {
+        panic!("Invalid sample directive \"{directive}\": unknown level \"{level}\"")
+    });
+    let n: usize = n.parse().unwrap_or_else(|_| {
+        panic!("Invalid sample directive \"{directive}\": \"{n}\" is not a positive integer")
+    });
+    assert!(
+        n > 0,
+        "Invalid sample directive \"{directive}\": n must be > 0"
+    );
+    (span_name.to_string(), level, n)
+}
+
+type ReloadableFilter = reload::Layer<EnvFilter, Registry>;
+
+/// Applies the (possibly runtime-reloadable) `EnvFilter`, combined with a
+/// span-scoped sampling decimator when `config.sample_directive` is set.
+fn with_layer_filter(layer: LogLayer, config: &LayerConfig, filter: ReloadableFilter) -> LogLayer {
+    match &config.sample_directive {
+        Some(directive) => {
+            let sampler = Sampler::new(directive);
+            // `filter_fn` assumes a `Metadata`-only decision is cacheable per callsite
+            // (`Interest::always`/`never`) and would only ever evaluate the sampler once.
+            // `dynamic_filter_fn` defaults to `Interest::sometimes()`, so it's re-run for
+            // every event, which the sampler's per-event counter needs.
+            let sampling_filter =
+                dynamic_filter_fn(move |metadata, _ctx| sampler.should_emit(metadata.level()));
+            layer.with_filter(filter.and(sampling_filter)).boxed()
+        }
+        None => layer.with_filter(filter).boxed(),
+    }
+}
+
 /// Builds a single layer based on configuration.
 fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>, FilterHandle) {
     let env_filter = EnvFilter::new(&config.filter_directive);
@@ -290,10 +383,12 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>,
     match config.destination {
         LayerDestination::Console => {
             let writer = make_box_writer(std::io::stdout, config.format);
-            let layer = build_fmt_layer(writer, config.format, span_events, true)
-                .with_filter(reloadable_filter)
-                .boxed();
-            (layer, None, filter_handle)
+            let layer = build_fmt_layer(writer, config.format, span_events, true);
+            (
+                with_layer_filter(layer, config, reloadable_filter),
+                None,
+                filter_handle,
+            )
         }
         LayerDestination::File => {
             let dir = config
@@ -317,10 +412,12 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>,
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let writer = make_box_writer(non_blocking, config.format);
-            let layer = build_fmt_layer(writer, config.format, span_events, false)
-                .with_filter(reloadable_filter)
-                .boxed();
-            (layer, Some(guard), filter_handle)
+            let layer = build_fmt_layer(writer, config.format, span_events, false);
+            (
+                with_layer_filter(layer, config, reloadable_filter),
+                Some(guard),
+                filter_handle,
+            )
         }
     }
 }
@@ -553,6 +650,7 @@ mod tests {
                 None,
                 false,
                 None,
+                None,
             );
             let (_layer, guard, _handle) = build_layer_internal(&config);
             assert!(guard.is_none());
@@ -569,6 +667,7 @@ mod tests {
             Some("./logs".to_string()),
             Some("test_app".to_string()),
             true,
+            None,
             None,
         );
         let (_layer, guard, _handle) = build_layer_internal(&config);
@@ -590,6 +689,7 @@ mod tests {
             Some("test_app".to_string()),
             false,
             Some(2),
+            None,
         );
         let (_layer, guard, _handle) = build_layer_internal(&config);
         assert!(guard.is_some());
@@ -614,6 +714,7 @@ mod tests {
             Some(dir.to_string_lossy().into_owned()),
             Some("test".to_string()),
             false,
+            None,
             None,
         );
         let (layer, guard, handle) = build_layer_internal(&config);
@@ -1028,5 +1129,168 @@ mod tests {
 
         let compact_output = String::from_utf8(compact_buf.0.lock().unwrap().clone()).unwrap();
         assert!(!compact_output.contains("exception"));
+    }
+
+    #[test]
+    fn test_parse_sample_directive_parses_valid_directive() {
+        let (span_name, level, n) = parse_sample_directive("db_query:debug:20");
+        assert_eq!(span_name, "db_query");
+        assert_eq!(level, tracing::Level::DEBUG);
+        assert_eq!(n, 20);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected \"<span_name>:<level>:<n>\"")]
+    fn test_parse_sample_directive_panics_on_missing_parts() {
+        parse_sample_directive("db_query:debug");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown level")]
+    fn test_parse_sample_directive_panics_on_unknown_level() {
+        parse_sample_directive("db_query:noisy:20");
+    }
+
+    #[test]
+    #[should_panic(expected = "not a positive integer")]
+    fn test_parse_sample_directive_panics_on_invalid_n() {
+        parse_sample_directive("db_query:debug:many");
+    }
+
+    #[test]
+    #[should_panic(expected = "n must be > 0")]
+    fn test_parse_sample_directive_panics_on_zero_n() {
+        parse_sample_directive("db_query:debug:0");
+    }
+
+    #[test]
+    fn test_sampler_should_emit_passes_through_other_levels() {
+        let sampler = Sampler::new("db_query:debug:2");
+        CURRENT_SPANS.with(|cell| {
+            *cell.borrow_mut() = Some(serde_json::json!([{"name": "db_query", "fields": {}}]));
+        });
+        assert!(sampler.should_emit(&tracing::Level::INFO));
+        assert!(sampler.should_emit(&tracing::Level::INFO));
+        CURRENT_SPANS.with(|cell| *cell.borrow_mut() = None);
+    }
+
+    #[test]
+    fn test_sampler_should_emit_passes_through_outside_the_span() {
+        let sampler = Sampler::new("db_query:debug:2");
+        assert!(sampler.should_emit(&tracing::Level::DEBUG));
+        assert!(sampler.should_emit(&tracing::Level::DEBUG));
+        assert!(sampler.should_emit(&tracing::Level::DEBUG));
+    }
+
+    #[test]
+    fn test_sampler_should_emit_decimates_within_the_span() {
+        let sampler = Sampler::new("db_query:debug:3");
+        CURRENT_SPANS.with(|cell| {
+            *cell.borrow_mut() = Some(serde_json::json!([{"name": "db_query", "fields": {}}]));
+        });
+        let kept = (0..9)
+            .filter(|_| sampler.should_emit(&tracing::Level::DEBUG))
+            .count();
+        CURRENT_SPANS.with(|cell| *cell.borrow_mut() = None);
+        assert_eq!(kept, 3); // 1-in-3 of 9 events
+    }
+
+    #[test]
+    fn test_with_layer_filter_thins_events_within_the_sampled_span_only() {
+        use std::sync::Arc;
+
+        #[derive(Clone, Default)]
+        struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+        impl io::Write for SharedBuf {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().write(buf)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> MakeWriter<'a> for SharedBuf {
+            type Writer = SharedBuf;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = SharedBuf::default();
+        let writer = make_box_writer(buf.clone(), LogFormat::Compact);
+        let layer = build_fmt_layer(writer, LogFormat::Compact, FmtSpan::NONE, false);
+
+        let config = LayerConfig::new(
+            "sampled".to_string(),
+            "trace".to_string(),
+            LogFormat::Compact,
+            LayerDestination::Console,
+            None,
+            None,
+            false,
+            None,
+            Some("db_query:debug:5".to_string()),
+        );
+        let (reloadable_filter, _handle) =
+            reload::Layer::new(EnvFilter::new(&config.filter_directive));
+        let filtered = with_layer_filter(layer, &config, reloadable_filter);
+
+        let subscriber = Registry::default().with(filtered);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let in_scope_spans = Some(serde_json::json!([{"name": "db_query", "fields": {}}]));
+        for i in 0..10 {
+            log_sink(
+                10,
+                &format!("in-span debug {i}"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                in_scope_spans.clone(),
+                None,
+            );
+        }
+        for i in 0..3 {
+            log_sink(
+                10,
+                &format!("no-span debug {i}"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+        }
+        for i in 0..3 {
+            log_sink(
+                20,
+                &format!("in-span info {i}"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                in_scope_spans.clone(),
+                None,
+            );
+        }
+
+        let output = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(output.matches("in-span debug").count(), 2); // keeps 1-in-5 of 10
+        assert_eq!(output.matches("no-span debug").count(), 3); // untouched: not in the span
+        assert_eq!(output.matches("in-span info").count(), 3); // untouched: wrong level
     }
 }

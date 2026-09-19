@@ -88,6 +88,16 @@ class TestBuildLayerConfig:
         )
         assert config.max_log_files == expected_max_log_files
 
+    def test_sample_directive(self) -> None:
+        """Test that sample_directive is passed through to the LayerConfig."""
+        expected_sample_directive = 'db_query:debug:20'
+        config = _functions.build_layer_config(
+            name='test',
+            filter_directive='trace',
+            sample_directive=expected_sample_directive,
+        )
+        assert config.sample_directive == expected_sample_directive
+
 
 class TestInitTracing:
     """Tests for the init_tracing function."""

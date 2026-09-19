@@ -19,6 +19,7 @@ fn test_set_filter_wrapper_reloads_a_known_layer_and_rejects_unknown_names() {
         file_prefix: Some("test".to_string()),
         include_span_events: false,
         max_log_files: None,
+        sample_directive: None,
     };
 
     let _guard = init_tracing(vec![config]).expect("init_tracing should succeed");

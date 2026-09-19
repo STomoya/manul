@@ -134,6 +134,8 @@ pub struct PyLayerConfig {
     pub include_span_events: bool,
     #[pyo3(get, set)]
     pub max_log_files: Option<usize>,
+    #[pyo3(get, set)]
+    pub sample_directive: Option<String>,
 }
 
 impl From<&PyLayerConfig> for LayerConfig {
@@ -147,6 +149,7 @@ impl From<&PyLayerConfig> for LayerConfig {
             value.file_prefix.clone(),
             value.include_span_events,
             value.max_log_files,
+            value.sample_directive.clone(),
         )
     }
 }
@@ -154,7 +157,7 @@ impl From<&PyLayerConfig> for LayerConfig {
 #[pymethods]
 impl PyLayerConfig {
     #[new]
-    #[pyo3(signature = (name, filter_directive, format=PyLogFormat::Compact, destination=PyLayerDestination::Console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None))]
+    #[pyo3(signature = (name, filter_directive, format=PyLogFormat::Compact, destination=PyLayerDestination::Console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None, sample_directive=None))]
     #[allow(clippy::too_many_arguments)]
     fn py_new(
         name: String,
@@ -165,6 +168,7 @@ impl PyLayerConfig {
         file_prefix: Option<String>,
         include_span_events: bool,
         max_log_files: Option<usize>,
+        sample_directive: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -175,12 +179,13 @@ impl PyLayerConfig {
             file_prefix,
             include_span_events,
             max_log_files,
+            sample_directive,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "LayerConfig(name={}, filter_directive={}, format={}, destination={}, file_dir={}, file_prefix={}, include_span_events={}, max_log_files={})",
+            "LayerConfig(name={}, filter_directive={}, format={}, destination={}, file_dir={}, file_prefix={}, include_span_events={}, max_log_files={}, sample_directive={})",
             self.name,
             self.filter_directive,
             self.format.__str__(),
@@ -198,6 +203,11 @@ impl PyLayerConfig {
             self.include_span_events,
             if let Some(n) = self.max_log_files {
                 n.to_string()
+            } else {
+                "None".to_string()
+            },
+            if let Some(directive) = &self.sample_directive {
+                directive.to_string()
             } else {
                 "None".to_string()
             }
@@ -385,10 +395,11 @@ mod tests {
             None,
             false,
             None,
+            None,
         );
         assert_eq!(
             config.__repr__(),
-            "LayerConfig(name=test_layer, filter_directive=info, format=compact, destination=console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None)"
+            "LayerConfig(name=test_layer, filter_directive=info, format=compact, destination=console, file_dir=None, file_prefix=None, include_span_events=false, max_log_files=None, sample_directive=None)"
         );
 
         let core_config = LayerConfig::from(&config);
@@ -407,10 +418,11 @@ mod tests {
             Some("app".to_string()),
             true,
             Some(3),
+            Some("db_query:debug:20".to_string()),
         );
         assert_eq!(
             config.__repr__(),
-            "LayerConfig(name=file_layer, filter_directive=debug, format=json, destination=file, file_dir=./logs, file_prefix=app, include_span_events=true, max_log_files=3)"
+            "LayerConfig(name=file_layer, filter_directive=debug, format=json, destination=file, file_dir=./logs, file_prefix=app, include_span_events=true, max_log_files=3, sample_directive=db_query:debug:20)"
         );
     }
 
@@ -463,6 +475,7 @@ mod tests {
             None,
             None,
             false,
+            None,
             None,
         );
         let result = init_tracing(vec![config]);

@@ -15,6 +15,7 @@ fn test_init_tracing_success_and_idempotent() {
         Some("test".to_string()),
         false,
         None,
+        None,
     );
 
     let first = init_tracing(vec![config.clone()]);

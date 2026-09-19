@@ -44,6 +44,7 @@ def build_layer_config(
     file_prefix: str | None = None,
     include_span_events: bool = False,
     max_log_files: int | None = None,
+    sample_directive: str | None = None,
 ) -> _logger.LayerConfig:
     """Build a layer configuration.
 
@@ -60,6 +61,9 @@ def build_layer_config(
         include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
         max_log_files (int | None, optional): Cap on rotated log files to retain (oldest pruned first). None
             keeps every file. Defaults to None.
+        sample_directive (str | None, optional): `"<span_name>:<level>:<n>"` -- while `span_name` is open,
+            keep 1 in every `n` events at `level` on this layer and drop the rest. Events at other levels,
+            or outside that span, are unaffected. None disables sampling. Defaults to None.
 
     Returns:
         _logger.LayerConfig: The layer configuration.
@@ -77,6 +81,7 @@ def build_layer_config(
         file_prefix=file_prefix,
         include_span_events=include_span_events,
         max_log_files=max_log_files,
+        sample_directive=sample_directive,
     )
 
 
