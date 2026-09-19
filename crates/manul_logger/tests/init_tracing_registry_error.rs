@@ -16,6 +16,9 @@ fn test_init_tracing_registry_error() {
         None,
         None,
         false,
+        None,
+        None,
+        false,
     );
 
     let err = match init_tracing(vec![config]) {

@@ -20,6 +20,9 @@ fn test_init_tracing_wrapper_maps_registry_error_to_runtime_error() {
         file_dir: None,
         file_prefix: None,
         include_span_events: false,
+        max_log_files: None,
+        sample_directive: None,
+        use_local_time: false,
     };
 
     let err = match init_tracing(vec![config]) {

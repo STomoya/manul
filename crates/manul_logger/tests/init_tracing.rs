@@ -14,6 +14,9 @@ fn test_init_tracing_success_and_idempotent() {
         Some(dir.to_string_lossy().into_owned()),
         Some("test".to_string()),
         false,
+        None,
+        None,
+        false,
     );
 
     let first = init_tracing(vec![config.clone()]);

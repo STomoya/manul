@@ -92,6 +92,7 @@ dependencies = [
 name = "manul_logger"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tracing",
  "tracing-appender",
  "tracing-log",
@@ -106,6 +107,7 @@ dependencies = [
  "manul_core",
  "manul_logger",
  "pyo3",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]

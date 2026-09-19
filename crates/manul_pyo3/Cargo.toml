@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 manul_core = { workspace = true }
 manul_logger = { workspace = true }
 pyo3 = { workspace = true, features = ["abi3-py311"] }
+serde_json = "1"
 
 [dev-dependencies]
 tracing = "0.1.44"

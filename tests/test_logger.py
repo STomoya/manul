@@ -6,18 +6,21 @@ Rust calls are mocked to verify that the correct parameters are passed from Pyth
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import logging.handlers
+import queue
+import sys
 from typing import TYPE_CHECKING, Literal
+from unittest.mock import ANY
 
 import pytest
 
 from manul._manul import _logger
 from manul.logger import _functions
-from manul.logger.handler import TracingHandler
+from manul.logger.handler import TracingHandler, TracingQueueHandler
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from pytest_mock import MockerFixture, MockType
 
 
@@ -76,6 +79,38 @@ class TestBuildLayerConfig:
         )
         assert config.destination == expected_destination
 
+    def test_max_log_files(self) -> None:
+        """Test that max_log_files is passed through to the LayerConfig."""
+        expected_max_log_files = 5
+        config = _functions.build_layer_config(
+            name='test',
+            filter_directive='trace',
+            destination='file',
+            max_log_files=expected_max_log_files,
+        )
+        assert config.max_log_files == expected_max_log_files
+
+    def test_sample_directive(self) -> None:
+        """Test that sample_directive is passed through to the LayerConfig."""
+        expected_sample_directive = 'db_query:debug:20'
+        config = _functions.build_layer_config(
+            name='test',
+            filter_directive='trace',
+            sample_directive=expected_sample_directive,
+        )
+        assert config.sample_directive == expected_sample_directive
+
+    def test_use_local_time_defaults_to_utc(self) -> None:
+        """Test that use_local_time defaults to False (UTC) when omitted."""
+        config = _functions.build_layer_config(name='test', filter_directive='trace')
+        assert config.use_local_time is False
+
+    @pytest.mark.parametrize('use_local_time', [True, False])
+    def test_use_local_time_is_passed_through(self, use_local_time: bool) -> None:  # noqa: FBT001
+        """Test that an explicit use_local_time is passed through to the LayerConfig."""
+        config = _functions.build_layer_config(name='test', filter_directive='trace', use_local_time=use_local_time)
+        assert config.use_local_time == use_local_time
+
 
 class TestInitTracing:
     """Tests for the init_tracing function."""
@@ -102,68 +137,50 @@ class TestInitTracing:
         mock_init_tracing.assert_called_once_with([config])
 
 
+class TestSetFilter:
+    """Tests for the set_filter function."""
+
+    def test_set_filter_forwards_arguments(self, mocker: MockerFixture) -> None:
+        """Test that set_filter forwards its arguments to the pyo3 wrapper unchanged."""
+        mock_set_filter = mocker.patch.object(_logger, 'set_filter', autospec=True)
+        _functions.set_filter('my_layer', 'debug')
+        mock_set_filter.assert_called_once_with('my_layer', 'debug')
+
+
 class TestLogFunctions:
     """Tests for the logging functions (info, debug, warn, error, trace, log_sink)."""
 
     @pytest.fixture
-    def mock_log_fn(self, mocker: MockerFixture) -> Callable[..., MockType]:
-        """Mock the underlying log functions in the _logger module."""
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function."""
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
 
-        def factory(level: str) -> MockType:
-            """Create a mock for the specified log level."""
-            target = _functions if hasattr(_functions, level) else _logger
-            return mocker.patch.object(target, level, autospec=True)
-
-        return factory
-
-    def test_info(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the info function."""
-        mock_log = mock_log_fn('info')
-        _functions.info('test info message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test info message',
+    @pytest.mark.parametrize(
+        ('level', 'levelno'),
+        [('trace', 0), ('debug', 10), ('info', 20), ('warn', 30), ('error', 40)],
+    )
+    def test_level_function_reports_caller_as_location(
+        self,
+        mock_log_sink: MockType,
+        level: str,
+        levelno: int,
+    ) -> None:
+        """Test that trace/debug/info/warn/error attribute the log to their caller's frame."""
+        getattr(_functions, level)(f'test {level} message', extra={'key': 'value'})
+        mock_log_sink.assert_called_once_with(
+            levelno=levelno,
+            message=f'test {level} message',
+            filename=__file__,
+            func_name='test_level_function_reports_caller_as_location',
+            lineno=ANY,
+            module_name='test_logger',
             extra={'key': 'value'},
+            spans=None,
+            exception=None,
         )
 
-    def test_debug(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the debug function."""
-        mock_log = mock_log_fn('debug')
-        _functions.debug('test debug message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test debug message',
-            extra={'key': 'value'},
-        )
-
-    def test_warn(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the warn function."""
-        mock_log = mock_log_fn('warn')
-        _functions.warn('test warn message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test warn message',
-            extra={'key': 'value'},
-        )
-
-    def test_error(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the error function."""
-        mock_log = mock_log_fn('error')
-        _functions.error('test error message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test error message',
-            extra={'key': 'value'},
-        )
-
-    def test_trace(self, mock_log_fn: Callable[..., MockType]) -> None:
-        """Test the trace function."""
-        mock_log = mock_log_fn('trace')
-        _functions.trace('test trace message', extra={'key': 'value'})
-        mock_log.assert_called_once_with(
-            'test trace message',
-            extra={'key': 'value'},
-        )
-
-    def test_log_sink(self, mock_log_fn: Callable[..., MockType]) -> None:
+    def test_log_sink(self, mock_log_sink: MockType) -> None:
         """Test the log_sink function."""
-        mock_log = mock_log_fn('_log_sink')
         _functions.log_sink(
             levelno=20,
             message='test sink message',
@@ -173,7 +190,7 @@ class TestLogFunctions:
             module_name='test_mod',
             extra={'key': 'value'},
         )
-        mock_log.assert_called_once_with(
+        mock_log_sink.assert_called_once_with(
             levelno=20,
             message='test sink message',
             filename='test.py',
@@ -181,7 +198,255 @@ class TestLogFunctions:
             lineno=10,
             module_name='test_mod',
             extra={'key': 'value'},
+            spans=None,
+            exception=None,
         )
+
+    def test_log_sink_forwards_exception(self, mock_log_sink: MockType) -> None:
+        """Test that log_sink forwards a passed exception payload as-is."""
+        exception = {'type': 'ValueError', 'message': 'oops', 'traceback': 'Traceback...'}
+        _functions.log_sink(
+            levelno=40,
+            message='boom',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test_mod',
+            exception=exception,
+        )
+        mock_log_sink.assert_called_once_with(
+            levelno=40,
+            message='boom',
+            filename='test.py',
+            func_name='test_func',
+            lineno=10,
+            module_name='test_mod',
+            extra=None,
+            spans=None,
+            exception=exception,
+        )
+
+    def test_log_sink_attaches_current_spans(self, mock_log_sink: MockType) -> None:
+        """Test that log_sink picks up the currently open span stack."""
+        with _functions.span('outer', request_id=1), _functions.span('inner', step='validate'):
+            _functions.info('nested message')
+
+        # Two more calls follow: the inner and outer spans' own close-timing events.
+        mock_log_sink.assert_any_call(
+            levelno=20,
+            message='nested message',
+            filename=__file__,
+            func_name='test_log_sink_attaches_current_spans',
+            lineno=ANY,
+            module_name='test_logger',
+            extra=None,
+            spans=[
+                {'name': 'outer', 'fields': {'request_id': 1}},
+                {'name': 'inner', 'fields': {'step': 'validate'}},
+            ],
+            exception=None,
+        )
+        expected_call_count = 3  # nested message + inner span close + outer span close
+        assert mock_log_sink.call_count == expected_call_count
+
+
+class TestSpan:
+    """Tests for the span context manager."""
+
+    @pytest.fixture(autouse=True)
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function.
+
+        Autoused: span close now emits a timing event through it, so tests that
+        don't care about that event still shouldn't make real pyo3 calls.
+        """
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
+
+    def test_span_close_emits_debug_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that leaving a span logs a debug-level close event with a duration."""
+        with _functions.span('req', request_id=42):
+            pass
+
+        mock_log_sink.assert_called_once()
+        kwargs = mock_log_sink.call_args.kwargs
+        assert kwargs['levelno'] == _functions._LEVELS['debug']
+        assert kwargs['message'] == 'req closed'
+        assert kwargs['spans'] == [{'name': 'req', 'fields': {'request_id': 42}}]
+        assert isinstance(kwargs['extra']['duration_ms'], float)
+
+    def test_span_pops_stack_even_if_close_event_dispatch_raises(self, mock_log_sink: MockType) -> None:
+        """Test that a failure logging the close event doesn't leak the span frame."""
+        mock_log_sink.side_effect = RuntimeError('boom')
+
+        with pytest.raises(RuntimeError, match='boom'), _functions.span('req'):
+            pass
+
+        assert _functions._current_spans_payload() is None
+
+    def test_async_span_close_emits_debug_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that the timing close event also fires for `async with`."""
+
+        async def run() -> None:
+            async with _functions.span('job'):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+
+        mock_log_sink.assert_called_once()
+        kwargs = mock_log_sink.call_args.kwargs
+        assert kwargs['levelno'] == _functions._LEVELS['debug']
+        assert kwargs['message'] == 'job closed'
+        assert isinstance(kwargs['extra']['duration_ms'], float)
+
+    def test_span_close_can_disable_the_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False suppresses the close event but still pops the span."""
+        assert _functions._current_spans_payload() is None
+        with _functions.span('req', log_close=False):
+            assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {}}]
+
+        mock_log_sink.assert_not_called()
+        assert _functions._current_spans_payload() is None
+
+    def test_async_span_close_can_disable_the_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False also suppresses the close event for `async with`."""
+
+        async def run() -> None:
+            async with _functions.span('job', log_close=False):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+
+        mock_log_sink.assert_not_called()
+
+    def test_span_is_scoped_to_with_block(self) -> None:
+        """Test that the span stack is empty before, populated during, and empty after."""
+        assert _functions._current_spans_payload() is None
+        with _functions.span('req', request_id=42) as ctx:
+            assert isinstance(ctx, _functions.SpanContext)
+            assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {'request_id': 42}}]
+        assert _functions._current_spans_payload() is None
+
+    def test_span_resets_on_exception(self) -> None:
+        """Test that the span is popped even if the block raises."""
+        error_message = 'boom'
+        with pytest.raises(ValueError, match=error_message), _functions.span('req'):
+            raise ValueError(error_message)
+        assert _functions._current_spans_payload() is None
+
+    def test_nested_spans_stack_in_order(self) -> None:
+        """Test that nested spans append to, rather than replace, the current stack."""
+        with _functions.span('outer', a=1):
+            with _functions.span('inner', b=2):
+                assert _functions._current_spans_payload() == [
+                    {'name': 'outer', 'fields': {'a': 1}},
+                    {'name': 'inner', 'fields': {'b': 2}},
+                ]
+            assert _functions._current_spans_payload() == [{'name': 'outer', 'fields': {'a': 1}}]
+
+    def test_span_works_as_async_context_manager(self) -> None:
+        """Test that `async with` pushes and pops the span like the sync path."""
+
+        async def run() -> None:
+            assert _functions._current_spans_payload() is None
+            async with _functions.span('req', request_id=42) as ctx:
+                assert isinstance(ctx, _functions.SpanContext)
+                assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {'request_id': 42}}]
+            assert _functions._current_spans_payload() is None
+
+        asyncio.run(run())
+
+    def test_span_is_isolated_per_asyncio_task(self) -> None:
+        """Test that concurrent tasks don't see each other's span stacks."""
+        results = {}
+
+        async def worker(name: str, delay: float) -> None:
+            async with _functions.span(name):
+                await asyncio.sleep(delay)
+                results[name] = _functions._current_spans_payload()
+
+        async def run() -> None:
+            await asyncio.gather(worker('first', 0.02), worker('second', 0.0))
+
+        asyncio.run(run())
+
+        assert results['first'] == [{'name': 'first', 'fields': {}}]
+        assert results['second'] == [{'name': 'second', 'fields': {}}]
+
+
+class TestSpanDecorator:
+    """Tests for the span_decorator function."""
+
+    @pytest.fixture(autouse=True)
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function."""
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
+
+    def test_sync_function_is_wrapped_in_a_span(self, mock_log_sink: MockType) -> None:
+        """Test that a sync function's whole body runs inside the named span."""
+        captured = {}
+
+        @_functions.span_decorator('db_query', table='users')
+        def run_query() -> str:
+            captured['spans'] = _functions._current_spans_payload()
+            return 'result'
+
+        assert _functions._current_spans_payload() is None
+        result = run_query()
+
+        assert result == 'result'
+        assert captured['spans'] == [{'name': 'db_query', 'fields': {'table': 'users'}}]
+        assert _functions._current_spans_payload() is None
+        mock_log_sink.assert_called_once()
+        assert mock_log_sink.call_args.kwargs['message'] == 'db_query closed'
+
+    def test_async_function_is_wrapped_in_a_span(self, mock_log_sink: MockType) -> None:
+        """Test that an async function's whole body runs inside the named span."""
+        captured = {}
+
+        @_functions.span_decorator('job')
+        async def run_job() -> str:
+            captured['spans'] = _functions._current_spans_payload()
+            await asyncio.sleep(0)
+            return 'done'
+
+        result = asyncio.run(run_job())
+
+        assert result == 'done'
+        assert captured['spans'] == [{'name': 'job', 'fields': {}}]
+        mock_log_sink.assert_called_once()
+
+    def test_defaults_name_to_qualname(self) -> None:
+        """Test that omitting name uses the wrapped function's __qualname__."""
+        captured = {}
+
+        @_functions.span_decorator()
+        def my_func() -> None:
+            captured['spans'] = _functions._current_spans_payload()
+
+        my_func()
+
+        assert captured['spans'] == [{'name': my_func.__qualname__, 'fields': {}}]
+
+    def test_log_close_can_be_disabled(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False suppresses the timing event for a decorated function."""
+
+        @_functions.span_decorator('quiet', log_close=False)
+        def run() -> None:
+            pass
+
+        run()
+
+        mock_log_sink.assert_not_called()
+
+    def test_preserves_function_metadata(self) -> None:
+        """Test that functools.wraps preserves the wrapped function's name and docstring."""
+
+        @_functions.span_decorator()
+        def documented() -> None:
+            """A docstring."""
+
+        assert documented.__name__ == 'documented'
+        assert documented.__doc__ == 'A docstring.'
 
 
 class TestTracingHandler:
@@ -225,6 +490,8 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra={'extra_key': 'extra_value'},
+            exception=None,
+            spans=None,
         )
 
     def test_no_extra(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
@@ -244,7 +511,37 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra=None,
+            exception=None,
+            spans=None,
         )
+
+    def test_emit_with_exc_info_builds_exception_payload(
+        self,
+        mocker: MockerFixture,
+        mock_record: logging.LogRecord,
+    ) -> None:
+        """Test that emit captures exc_info as a typed {type, message, traceback} dict."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+        handler = TracingHandler()
+
+        error_message = 'oops'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            mock_record.exc_info = sys.exc_info()
+
+        handler.emit(mock_record)
+
+        mock_log_sink.assert_called_once()
+        exception = mock_log_sink.call_args.kwargs['exception']
+        assert exception['type'] == 'ValueError'
+        assert exception['message'] == error_message
+        assert 'Traceback' in exception['traceback']
+        assert 'ValueError: oops' in exception['traceback']
 
     def test_handle_error(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
         """Test the handleError method of TracingHandler."""
@@ -270,5 +567,111 @@ class TestTracingHandler:
             lineno=10,
             module_name='test',
             extra=None,
+            exception=None,
+            spans=None,
         )
         mock_handle_error.assert_called_once_with(handler, mock_record)
+
+
+class TestTracingQueueHandler:
+    """Tests for the TracingQueueHandler class."""
+
+    def test_prepare_preserves_exc_info(self) -> None:
+        """Test that prepare() keeps exc_info intact, unlike the stdlib QueueHandler."""
+        error_message = 'boom'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            record = logging.LogRecord(
+                name='test_logger',
+                level=logging.ERROR,
+                pathname='test.py',
+                lineno=10,
+                msg='%s happened',
+                args=('it',),
+                exc_info=sys.exc_info(),
+            )
+
+        handler = TracingQueueHandler(queue.Queue())
+        prepared = handler.prepare(record)
+
+        assert prepared.exc_info == record.exc_info
+        assert prepared.args is None
+        assert prepared.message == 'it happened'
+        assert prepared.msg == 'it happened'
+        # prepare() copies the record rather than mutating it in place.
+        assert record.args == ('it',)
+
+    def test_prepare_snapshots_the_current_span_stack(self) -> None:
+        """Test that prepare() captures the calling thread's span stack onto the record."""
+        record = logging.LogRecord(
+            name='test_logger',
+            level=logging.INFO,
+            pathname='test.py',
+            lineno=10,
+            msg='hello',
+            args=None,
+            exc_info=None,
+        )
+        handler = TracingQueueHandler(queue.Queue())
+
+        with _functions.span('req', request_id=42):
+            prepared = handler.prepare(record)
+
+        assert prepared._spans == [{'name': 'req', 'fields': {'request_id': 42}}]  # ty: ignore[unresolved-attribute]
+
+    def test_end_to_end_preserves_spans_through_the_queue(self, mocker: MockerFixture) -> None:
+        """Test that a span opened on the calling thread survives the QueueListener hop."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+
+        record_queue: queue.Queue = queue.Queue()
+        listener = logging.handlers.QueueListener(record_queue, TracingHandler())
+        listener.start()
+
+        logger = logging.getLogger('test_tracing_queue_handler_spans')
+        logger.setLevel(logging.INFO)
+        logger.addHandler(TracingQueueHandler(record_queue))
+        logger.propagate = False
+
+        with _functions.span('req', request_id=42):
+            logger.info('it happened')
+
+        listener.stop()
+
+        mock_log_sink.assert_called_once()
+        assert mock_log_sink.call_args.kwargs['spans'] == [{'name': 'req', 'fields': {'request_id': 42}}]
+
+    def test_end_to_end_preserves_structured_exception_through_the_queue(self, mocker: MockerFixture) -> None:
+        """Test that a QueueListener-routed record still gets a structured exception dict."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+
+        record_queue: queue.Queue = queue.Queue()
+        listener = logging.handlers.QueueListener(record_queue, TracingHandler())
+        listener.start()
+
+        logger = logging.getLogger('test_tracing_queue_handler')
+        logger.setLevel(logging.ERROR)
+        logger.addHandler(TracingQueueHandler(record_queue))
+        logger.propagate = False
+
+        error_message = 'boom'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            logger.exception('it happened')
+
+        listener.stop()
+
+        mock_log_sink.assert_called_once()
+        exception = mock_log_sink.call_args.kwargs['exception']
+        assert exception is not None
+        assert exception['type'] == 'ValueError'
+        assert exception['message'] == error_message

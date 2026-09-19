@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Any
 
 __version__: str
 """The version of the manul_logger module."""
@@ -51,6 +50,15 @@ class LayerConfig:
     include_span_events: bool
     """Whether to include span events (enter/exit) in the logs."""
 
+    max_log_files: int | None
+    """The maximum number of rotated log files to keep, if the destination is a file."""
+
+    sample_directive: str | None
+    """`"<span_name>:<level>:<n>"`: within `span_name`, keep 1 in every `n` events at `level`."""
+
+    use_local_time: bool
+    """Whether to timestamp logs in the local timezone instead of UTC. Defaults to False (UTC)."""
+
     def __init__(
         self,
         name: str,
@@ -60,6 +68,9 @@ class LayerConfig:
         file_dir: str | None = None,
         file_prefix: str | None = None,
         include_span_events: bool = False,
+        max_log_files: int | None = None,
+        sample_directive: str | None = None,
+        use_local_time: bool = False,
     ) -> None:
         """Create a new LayerConfig.
 
@@ -71,6 +82,15 @@ class LayerConfig:
             file_dir (str | None, optional): Directory for logs (required if destination is File). Defaults to None.
             file_prefix (str | None, optional): Filename prefix for rolling logs. Defaults to None.
             include_span_events (bool, optional): Whether to log timing for span closures. Defaults to False.
+            max_log_files (int | None, optional): Cap on rotated log files to retain (oldest pruned first).
+                None keeps every file. Defaults to None.
+            sample_directive (str | None, optional): `"<span_name>:<level>:<n>"` -- while `span_name` is
+                open, keep 1 in every `n` events at `level` on this layer and drop the rest. Events at
+                other levels, or outside that span, are unaffected. None disables sampling. Defaults to
+                None.
+            use_local_time (bool, optional): Timestamp logs in the local timezone instead of UTC. UTC is
+                the de-facto standard for application logs (no DST ambiguity, correlates cleanly across
+                services), so this defaults to False.
 
         """
 
@@ -80,20 +100,12 @@ class TracingGuard:
 def init_tracing(layers: list[LayerConfig]) -> TracingGuard:
     """Initialize the tracing system."""
 
-def info(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log an info-level message."""
+def set_filter(layer_name: str, filter_directive: str) -> None:
+    """Change a layer's filter directive at runtime, without restarting the process.
 
-def debug(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a debug-level message."""
-
-def warn(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a warning-level message."""
-
-def error(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log an error-level message."""
-
-def trace(message: str, extra: dict[str, Any] | None = None) -> None:
-    """Log a trace-level message."""
+    `layer_name` must match a `name` given to one of the `LayerConfig`s passed to
+    `init_tracing`.
+    """
 
 def _log_sink(
     levelno: int,
@@ -103,5 +115,7 @@ def _log_sink(
     lineno: int,
     module_name: str,
     extra: dict | None = None,
+    spans: list[dict] | None = None,
+    exception: dict | None = None,
 ) -> None:
     """Receive log messages from Python and forward them to Rust."""
