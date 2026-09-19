@@ -1,5 +1,6 @@
 use manul_logger::logger::{
     LayerConfig, LayerDestination, LogFormat, init_tracing as core_init_tracing, log_sink,
+    set_filter as core_set_filter,
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -15,6 +16,7 @@ pub mod logger_bindings {
     #[pymodule_export]
     pub use super::{
         _log_sink, PyLayerConfig, PyLayerDestination, PyLogFormat, PyTracingGuard, init_tracing,
+        set_filter,
     };
 }
 
@@ -216,6 +218,17 @@ pub fn init_tracing(layers: Vec<PyLayerConfig>) -> PyResult<PyTracingGuard> {
     let core_layers: Vec<LayerConfig> = layers.iter().map(LayerConfig::from).collect();
     core_init_tracing(core_layers)
         .map(|guards| PyTracingGuard { _guards: guards })
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// Change a layer's filter directive at runtime, without restarting the process.
+///
+/// `layer_name` must match a `name` given to one of the `LayerConfig`s passed to
+/// `init_tracing`.
+#[pyfunction]
+#[pyo3(signature = (layer_name, filter_directive))]
+pub fn set_filter(layer_name: &str, filter_directive: &str) -> PyResult<()> {
+    core_set_filter(layer_name, filter_directive)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 

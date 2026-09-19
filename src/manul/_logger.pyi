@@ -85,6 +85,13 @@ class TracingGuard:
 def init_tracing(layers: list[LayerConfig]) -> TracingGuard:
     """Initialize the tracing system."""
 
+def set_filter(layer_name: str, filter_directive: str) -> None:
+    """Change a layer's filter directive at runtime, without restarting the process.
+
+    `layer_name` must match a `name` given to one of the `LayerConfig`s passed to
+    `init_tracing`.
+    """
+
 def _log_sink(
     levelno: int,
     message: str,

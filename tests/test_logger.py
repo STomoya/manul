@@ -114,6 +114,16 @@ class TestInitTracing:
         mock_init_tracing.assert_called_once_with([config])
 
 
+class TestSetFilter:
+    """Tests for the set_filter function."""
+
+    def test_set_filter_forwards_arguments(self, mocker: MockerFixture) -> None:
+        """Test that set_filter forwards its arguments to the pyo3 wrapper unchanged."""
+        mock_set_filter = mocker.patch.object(_logger, 'set_filter', autospec=True)
+        _functions.set_filter('my_layer', 'debug')
+        mock_set_filter.assert_called_once_with('my_layer', 'debug')
+
+
 class TestLogFunctions:
     """Tests for the logging functions (info, debug, warn, error, trace, log_sink)."""
 

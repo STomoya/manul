@@ -93,6 +93,18 @@ def init_tracing(layers: list[_logger.LayerConfig]) -> _logger.TracingGuard:
     return _logger.init_tracing(layers)
 
 
+def set_filter(layer_name: str, filter_directive: str) -> None:
+    """Change a layer's filter directive at runtime, without restarting the process.
+
+    Args:
+        layer_name (str): Must match a `name` given to one of the `LayerConfig`s passed to
+            `init_tracing`.
+        filter_directive (str): RUST_LOG style filter (e.g. 'info' or 'my_crate=debug').
+
+    """
+    _logger.set_filter(layer_name, filter_directive)
+
+
 @dataclass(frozen=True, slots=True)
 class _SpanFrame:
     """One entry in the current span stack."""

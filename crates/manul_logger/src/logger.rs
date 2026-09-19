@@ -1,7 +1,8 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::str::FromStr;
-use std::sync::Once;
+use std::sync::{Mutex, Once, OnceLock};
 
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
@@ -13,10 +14,19 @@ use tracing_subscriber::{
         writer::{BoxMakeWriter, MakeWriter},
     },
     layer::SubscriberExt,
+    reload,
     util::SubscriberInitExt,
 };
 
 static INIT: Once = Once::new();
+
+/// A per-layer filter that can be swapped at runtime via `set_filter`.
+type FilterHandle = reload::Handle<EnvFilter, Registry>;
+
+/// Layer name -> its reload handle, populated once `init_tracing` successfully
+/// installs the global subscriber. Layers are looked up by the `name` given in
+/// their `LayerConfig`.
+static FILTER_HANDLES: OnceLock<Mutex<HashMap<String, FilterHandle>>> = OnceLock::new();
 
 thread_local! {
     /// Holds the structured `attributes` payload for the log call currently being
@@ -235,13 +245,15 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
     let mut guards = Vec::new();
     let mut subscriber_layers: Vec<LogLayer> = Vec::new();
     let mut initialized_info = Vec::new();
+    let mut filter_handles = HashMap::new();
 
     for config in &layers {
-        let (layer, guard) = build_layer_internal(config);
+        let (layer, guard, filter_handle) = build_layer_internal(config);
         subscriber_layers.push(layer);
         if let Some(g) = guard {
             guards.push(g);
         }
+        filter_handles.insert(config.name.clone(), filter_handle);
         initialized_info.push((config.name.clone(), config.filter_directive.clone()));
     }
 
@@ -249,6 +261,8 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
     INIT.call_once(|| {
         if let Err(e) = Registry::default().with(subscriber_layers).try_init() {
             init_err = Some(e.to_string());
+        } else {
+            let _ = FILTER_HANDLES.set(Mutex::new(filter_handles));
         }
     });
 
@@ -264,8 +278,9 @@ pub fn init_tracing(layers: Vec<LayerConfig>) -> Result<TracingGuards, TracingIn
 }
 
 /// Builds a single layer based on configuration.
-fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>) {
+fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>, FilterHandle) {
     let env_filter = EnvFilter::new(&config.filter_directive);
+    let (reloadable_filter, filter_handle) = reload::Layer::new(env_filter);
     let span_events = if config.include_span_events {
         FmtSpan::CLOSE
     } else {
@@ -276,9 +291,9 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>)
         LayerDestination::Console => {
             let writer = make_box_writer(std::io::stdout, config.format);
             let layer = build_fmt_layer(writer, config.format, span_events, true)
-                .with_filter(env_filter)
+                .with_filter(reloadable_filter)
                 .boxed();
-            (layer, None)
+            (layer, None, filter_handle)
         }
         LayerDestination::File => {
             let dir = config
@@ -303,11 +318,41 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>)
 
             let writer = make_box_writer(non_blocking, config.format);
             let layer = build_fmt_layer(writer, config.format, span_events, false)
-                .with_filter(env_filter)
+                .with_filter(reloadable_filter)
                 .boxed();
-            (layer, Some(guard))
+            (layer, Some(guard), filter_handle)
         }
     }
+}
+
+/// Error returned when adjusting a layer's filter at runtime fails.
+#[derive(Debug)]
+pub struct FilterUpdateError(String);
+
+impl std::fmt::Display for FilterUpdateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Change a layer's filter directive at runtime, without restarting the process.
+///
+/// `layer_name` must match a `name` given to one of the `LayerConfig`s passed to
+/// `init_tracing`.
+pub fn set_filter(layer_name: &str, filter_directive: &str) -> Result<(), FilterUpdateError> {
+    let handles = FILTER_HANDLES
+        .get()
+        .ok_or_else(|| FilterUpdateError("Tracing has not been initialized.".to_string()))?
+        .lock()
+        .expect("filter handles mutex poisoned");
+
+    let handle = handles
+        .get(layer_name)
+        .ok_or_else(|| FilterUpdateError(format!("Unknown layer: \"{layer_name}\"")))?;
+
+    handle
+        .reload(EnvFilter::new(filter_directive))
+        .map_err(|e| FilterUpdateError(e.to_string()))
 }
 
 /// Wraps `make_writer` with `AttributeInjectingMakeWriter` for the JSON format only —
@@ -509,7 +554,7 @@ mod tests {
                 false,
                 None,
             );
-            let (_layer, guard) = build_layer_internal(&config);
+            let (_layer, guard, _handle) = build_layer_internal(&config);
             assert!(guard.is_none());
         }
     }
@@ -526,7 +571,7 @@ mod tests {
             true,
             None,
         );
-        let (_layer, guard) = build_layer_internal(&config);
+        let (_layer, guard, _handle) = build_layer_internal(&config);
         assert!(guard.is_some());
     }
 
@@ -546,8 +591,77 @@ mod tests {
             false,
             Some(2),
         );
-        let (_layer, guard) = build_layer_internal(&config);
+        let (_layer, guard, _handle) = build_layer_internal(&config);
         assert!(guard.is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_filter_update_error_display() {
+        assert_eq!(FilterUpdateError("boom".to_string()).to_string(), "boom");
+    }
+
+    #[test]
+    fn test_reload_handle_from_build_layer_internal_changes_what_is_captured() {
+        let dir =
+            std::env::temp_dir().join(format!("manul_logger_test_reload_{}", std::process::id()));
+        let config = LayerConfig::new(
+            "reloadable".to_string(),
+            "off".to_string(),
+            LogFormat::Compact,
+            LayerDestination::File,
+            Some(dir.to_string_lossy().into_owned()),
+            Some("test".to_string()),
+            false,
+            None,
+        );
+        let (layer, guard, handle) = build_layer_internal(&config);
+        let subscriber = Registry::default().with(layer);
+        let default_guard = tracing::subscriber::set_default(subscriber);
+
+        log_sink(
+            20,
+            "should be filtered out",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        handle
+            .reload(EnvFilter::new("info"))
+            .expect("reload should succeed while the subscriber is alive");
+
+        log_sink(
+            20,
+            "should be captured",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        drop(default_guard);
+        drop(guard); // Flush the non-blocking writer's buffered output.
+
+        let mut contents = String::new();
+        for entry in std::fs::read_dir(&dir).expect("log dir should exist") {
+            contents.push_str(&std::fs::read_to_string(entry.unwrap().path()).unwrap());
+        }
+
+        assert!(!contents.contains("should be filtered out"));
+        assert!(contents.contains("should be captured"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
