@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+import inspect
 import sys
 import time
 from contextvars import ContextVar
@@ -45,6 +47,7 @@ def build_layer_config(
     include_span_events: bool = False,
     max_log_files: int | None = None,
     sample_directive: str | None = None,
+    use_local_time: bool = False,
 ) -> _logger.LayerConfig:
     """Build a layer configuration.
 
@@ -64,6 +67,8 @@ def build_layer_config(
         sample_directive (str | None, optional): `"<span_name>:<level>:<n>"` -- while `span_name` is open,
             keep 1 in every `n` events at `level` on this layer and drop the rest. Events at other levels,
             or outside that span, are unaffected. None disables sampling. Defaults to None.
+        use_local_time (bool, optional): Timestamp logs in the local timezone instead of UTC. Defaults to
+            False (UTC), the de-facto standard for application logs.
 
     Returns:
         _logger.LayerConfig: The layer configuration.
@@ -82,6 +87,7 @@ def build_layer_config(
         include_span_events=include_span_events,
         max_log_files=max_log_files,
         sample_directive=sample_directive,
+        use_local_time=use_local_time,
     )
 
 
@@ -132,27 +138,42 @@ class SpanContext:
     See `_current_spans` for why this doesn't use a real `tracing` span.
     """
 
-    __slots__ = ('_frame', '_location', '_start', '_token')
+    __slots__ = ('_frame', '_location', '_log_close', '_start', '_token')
 
     _location: tuple[str, str, int, str]
+    _log_close: bool
     _start: float
     _token: Token[tuple[_SpanFrame, ...]]
 
-    def __init__(self, name: str, fields: dict) -> None:
+    def __init__(
+        self,
+        name: str,
+        fields: dict,
+        *,
+        log_close: bool = True,
+        location: tuple[str, str, int, str] | None = None,
+    ) -> None:
         self._frame = _SpanFrame(name, fields)
-        # Attribute the close event to wherever `span(...)` was opened, same as
-        # `_log` does for direct trace/debug/info/warn/error calls.
-        caller = sys._getframe(2)
-        self._location = (
-            caller.f_code.co_filename,
-            caller.f_code.co_name,
-            caller.f_lineno,
-            Path(caller.f_code.co_filename).stem,
-        )
+        self._log_close = log_close
+        if location is not None:
+            # Given by span_decorator: the wrapped function's own definition site is
+            # more useful than either the call site or this constructor's caller.
+            self._location = location
+        else:
+            # Attribute the close event to wherever `span(...)` was opened, same as
+            # `_log` does for direct trace/debug/info/warn/error calls.
+            caller = sys._getframe(2)
+            self._location = (
+                caller.f_code.co_filename,
+                caller.f_code.co_name,
+                caller.f_lineno,
+                Path(caller.f_code.co_filename).stem,
+            )
 
     def __enter__(self) -> Self:
         self._token = _current_spans.set((*_current_spans.get(), self._frame))
-        self._start = time.monotonic()
+        if self._log_close:
+            self._start = time.monotonic()
         return self
 
     def __exit__(
@@ -161,17 +182,18 @@ class SpanContext:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        duration_ms = (time.monotonic() - self._start) * 1000
-        filename, func_name, lineno, module_name = self._location
-        log_sink(
-            levelno=_LEVELS['debug'],
-            message=f'{self._frame.name} closed',
-            filename=filename,
-            func_name=func_name,
-            lineno=lineno,
-            module_name=module_name,
-            extra={'duration_ms': round(duration_ms, 3)},
-        )
+        if self._log_close:
+            duration_ms = (time.monotonic() - self._start) * 1000
+            filename, func_name, lineno, module_name = self._location
+            log_sink(
+                levelno=_LEVELS['debug'],
+                message=f'{self._frame.name} closed',
+                filename=filename,
+                func_name=func_name,
+                lineno=lineno,
+                module_name=module_name,
+                extra={'duration_ms': round(duration_ms, 3)},
+            )
         _current_spans.reset(self._token)
 
     async def __aenter__(self) -> Self:
@@ -186,20 +208,72 @@ class SpanContext:
         self.__exit__(exc_type, exc_value, traceback)
 
 
-def span(name: str, **fields: object) -> SpanContext:
+def span(name: str, *, log_close: bool = True, **fields: object) -> SpanContext:
     """Open a span, attaching `fields` to every log made while it's open.
 
     Works as both `with span(...):` and `async with span(...):`.
 
     Args:
         name (str): The span's name.
+        log_close (bool, optional): Whether to log a debug-level "{name} closed" timing event when
+            the span exits. Defaults to True.
         **fields: Arbitrary key/value data attached to the span.
 
     Returns:
         SpanContext: The span, as a context manager.
 
     """
-    return SpanContext(name, fields)
+    return SpanContext(name, fields, log_close=log_close)
+
+
+def span_decorator(
+    name: str | None = None, *, log_close: bool = True, **fields: object
+) -> Callable[[Callable[..., _T]], Callable[..., _T]]:
+    """Wrap a whole function's body in a span. Works on both sync and async functions.
+
+    `fields` are static, fixed at decoration time -- for fields derived from the call's
+    arguments, use `span(...)` as a context manager inside the function body instead.
+
+    Args:
+        name (str | None, optional): The span's name. Defaults to the wrapped function's
+            `__qualname__`.
+        log_close (bool, optional): Whether to log a debug-level "{name} closed" timing event when
+            the span exits. Defaults to True.
+        **fields: Arbitrary static key/value data attached to the span.
+
+    Returns:
+        Callable: A decorator.
+
+    """
+
+    def decorator(func: Callable[..., _T]) -> Callable[..., _T]:
+        # func is always a plain sync/async function in practice, which guarantees
+        # __code__/__qualname__ -- Callable[..., _T] itself doesn't promise that.
+        span_name = name if name is not None else func.__qualname__  # ty: ignore[unresolved-attribute]
+        location = (
+            func.__code__.co_filename,  # ty: ignore[unresolved-attribute]
+            func.__qualname__,  # ty: ignore[unresolved-attribute]
+            func.__code__.co_firstlineno,  # ty: ignore[unresolved-attribute]
+            Path(func.__code__.co_filename).stem,  # ty: ignore[unresolved-attribute]
+        )
+
+        if inspect.iscoroutinefunction(func):
+
+            @functools.wraps(func)
+            async def async_wrapper(*args: object, **kwargs: object) -> _T:
+                async with SpanContext(span_name, fields, log_close=log_close, location=location):
+                    return await func(*args, **kwargs)
+
+            return async_wrapper  # ty: ignore[invalid-return-type]
+
+        @functools.wraps(func)
+        def sync_wrapper(*args: object, **kwargs: object) -> _T:
+            with SpanContext(span_name, fields, log_close=log_close, location=location):
+                return func(*args, **kwargs)
+
+        return sync_wrapper
+
+    return decorator
 
 
 def _current_spans_payload() -> list[dict] | None:

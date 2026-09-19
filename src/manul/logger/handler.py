@@ -1,6 +1,8 @@
 """Handler."""
 
+import copy
 import logging
+import logging.handlers
 import traceback
 from logging import Handler
 
@@ -71,3 +73,25 @@ class TracingHandler(Handler):
             )
         except Exception:
             self.handleError(record)
+
+
+class TracingQueueHandler(logging.handlers.QueueHandler):
+    """A `QueueHandler` that preserves `exc_info` across the queue hop.
+
+    Pairs with `TracingHandler` via a `logging.handlers.QueueListener` to move
+    logging work off the calling thread. The stdlib `QueueHandler.prepare()`
+    clears `exc_info`/`exc_text` before enqueuing a record -- necessary for a
+    `multiprocessing.Queue`, since traceback objects aren't picklable -- but it
+    also silently drops `TracingHandler`'s structured JSON `exception` field
+    once the record reaches the listener thread. This subclass keeps
+    `exc_info` intact instead, so only use it with an in-process `queue.Queue`,
+    never a `multiprocessing.Queue`.
+    """
+
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        """Merge `args` into the message, but leave `exc_info` for the listener's handler."""
+        record = copy.copy(record)
+        record.message = record.getMessage()
+        record.msg = record.message
+        record.args = None
+        return record

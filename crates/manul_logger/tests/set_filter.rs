@@ -18,6 +18,7 @@ fn test_set_filter_reloads_a_running_layer_and_rejects_unknown_names() {
         false,
         None,
         None,
+        false,
     );
 
     let guards = init_tracing(vec![config]).expect("init_tracing should succeed");

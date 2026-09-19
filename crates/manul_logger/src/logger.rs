@@ -191,6 +191,7 @@ pub struct LayerConfig {
     pub include_span_events: bool,
     pub max_log_files: Option<usize>,
     pub sample_directive: Option<String>,
+    pub use_local_time: bool,
 }
 
 impl LayerConfig {
@@ -205,6 +206,7 @@ impl LayerConfig {
         include_span_events: bool,
         max_log_files: Option<usize>,
         sample_directive: Option<String>,
+        use_local_time: bool,
     ) -> Self {
         Self {
             name,
@@ -216,6 +218,7 @@ impl LayerConfig {
             include_span_events,
             max_log_files,
             sample_directive,
+            use_local_time,
         }
     }
 }
@@ -383,7 +386,13 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>,
     match config.destination {
         LayerDestination::Console => {
             let writer = make_box_writer(std::io::stdout, config.format);
-            let layer = build_fmt_layer(writer, config.format, span_events, true);
+            let layer = build_fmt_layer(
+                writer,
+                config.format,
+                span_events,
+                true,
+                config.use_local_time,
+            );
             (
                 with_layer_filter(layer, config, reloadable_filter),
                 None,
@@ -412,7 +421,13 @@ fn build_layer_internal(config: &LayerConfig) -> (LogLayer, Option<WorkerGuard>,
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let writer = make_box_writer(non_blocking, config.format);
-            let layer = build_fmt_layer(writer, config.format, span_events, false);
+            let layer = build_fmt_layer(
+                writer,
+                config.format,
+                span_events,
+                false,
+                config.use_local_time,
+            );
             (
                 with_layer_filter(layer, config, reloadable_filter),
                 Some(guard),
@@ -465,16 +480,38 @@ where
     }
 }
 
+/// Erases the concrete timer type, so `build_fmt_layer` can pick UTC or local time at
+/// runtime without duplicating each format's whole builder chain per timezone.
+struct BoxedTimer(Box<dyn fmt::time::FormatTime + Send + Sync>);
+
+impl fmt::time::FormatTime for BoxedTimer {
+    fn format_time(&self, w: &mut fmt::format::Writer<'_>) -> std::fmt::Result {
+        self.0.format_time(w)
+    }
+}
+
+/// UTC is the de-facto standard for application logs (no DST ambiguity, correlates
+/// cleanly across services); local time is opt-in via `LayerConfig.use_local_time`.
+fn build_timer(use_local_time: bool) -> BoxedTimer {
+    if use_local_time {
+        BoxedTimer(Box::new(fmt::time::LocalTime::rfc_3339()))
+    } else {
+        BoxedTimer(Box::new(fmt::time::UtcTime::rfc_3339()))
+    }
+}
+
 /// Configures the formatting layer with common production settings.
 fn build_fmt_layer(
     writer: BoxMakeWriter,
     format: LogFormat,
     span_events: FmtSpan,
     ansi: bool,
+    use_local_time: bool,
 ) -> LogLayer {
+    let timer = build_timer(use_local_time);
     match format {
         LogFormat::Json => fmt::layer()
-            .with_timer(fmt::time::LocalTime::rfc_3339())
+            .with_timer(timer)
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
@@ -484,7 +521,7 @@ fn build_fmt_layer(
             .with_target(false)
             .boxed(),
         LogFormat::Pretty => fmt::layer()
-            .with_timer(fmt::time::LocalTime::rfc_3339())
+            .with_timer(timer)
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
@@ -492,7 +529,7 @@ fn build_fmt_layer(
             .with_target(false)
             .boxed(),
         LogFormat::Compact => fmt::layer()
-            .with_timer(fmt::time::LocalTime::rfc_3339())
+            .with_timer(timer)
             .with_writer(writer)
             .with_ansi(ansi)
             .with_span_events(span_events)
@@ -592,6 +629,7 @@ pub fn log_sink(
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use tracing_subscriber::fmt::time::FormatTime;
     use tracing_test::traced_test;
 
     #[test]
@@ -651,6 +689,7 @@ mod tests {
                 false,
                 None,
                 None,
+                false,
             );
             let (_layer, guard, _handle) = build_layer_internal(&config);
             assert!(guard.is_none());
@@ -669,6 +708,7 @@ mod tests {
             true,
             None,
             None,
+            false,
         );
         let (_layer, guard, _handle) = build_layer_internal(&config);
         assert!(guard.is_some());
@@ -690,6 +730,7 @@ mod tests {
             false,
             Some(2),
             None,
+            false,
         );
         let (_layer, guard, _handle) = build_layer_internal(&config);
         assert!(guard.is_some());
@@ -716,6 +757,7 @@ mod tests {
             false,
             None,
             None,
+            false,
         );
         let (layer, guard, handle) = build_layer_internal(&config);
         let subscriber = Registry::default().with(layer);
@@ -971,12 +1013,17 @@ mod tests {
 
         let json_buf = SharedBuf::default();
         let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
-        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false, false);
 
         let compact_buf = SharedBuf::default();
         let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
-        let compact_layer =
-            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+        let compact_layer = build_fmt_layer(
+            compact_writer,
+            LogFormat::Compact,
+            FmtSpan::NONE,
+            false,
+            false,
+        );
 
         let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -1030,12 +1077,17 @@ mod tests {
 
         let json_buf = SharedBuf::default();
         let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
-        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false, false);
 
         let compact_buf = SharedBuf::default();
         let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
-        let compact_layer =
-            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+        let compact_layer = build_fmt_layer(
+            compact_writer,
+            LogFormat::Compact,
+            FmtSpan::NONE,
+            false,
+            false,
+        );
 
         let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -1094,12 +1146,17 @@ mod tests {
 
         let json_buf = SharedBuf::default();
         let json_writer = make_box_writer(json_buf.clone(), LogFormat::Json);
-        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false);
+        let json_layer = build_fmt_layer(json_writer, LogFormat::Json, FmtSpan::NONE, false, false);
 
         let compact_buf = SharedBuf::default();
         let compact_writer = make_box_writer(compact_buf.clone(), LogFormat::Compact);
-        let compact_layer =
-            build_fmt_layer(compact_writer, LogFormat::Compact, FmtSpan::NONE, false);
+        let compact_layer = build_fmt_layer(
+            compact_writer,
+            LogFormat::Compact,
+            FmtSpan::NONE,
+            false,
+            false,
+        );
 
         let subscriber = Registry::default().with(vec![json_layer, compact_layer]);
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -1221,7 +1278,7 @@ mod tests {
 
         let buf = SharedBuf::default();
         let writer = make_box_writer(buf.clone(), LogFormat::Compact);
-        let layer = build_fmt_layer(writer, LogFormat::Compact, FmtSpan::NONE, false);
+        let layer = build_fmt_layer(writer, LogFormat::Compact, FmtSpan::NONE, false, false);
 
         let config = LayerConfig::new(
             "sampled".to_string(),
@@ -1233,6 +1290,7 @@ mod tests {
             false,
             None,
             Some("db_query:debug:5".to_string()),
+            false,
         );
         let (reloadable_filter, _handle) =
             reload::Layer::new(EnvFilter::new(&config.filter_directive));
@@ -1292,5 +1350,31 @@ mod tests {
         assert_eq!(output.matches("in-span debug").count(), 2); // keeps 1-in-5 of 10
         assert_eq!(output.matches("no-span debug").count(), 3); // untouched: not in the span
         assert_eq!(output.matches("in-span info").count(), 3); // untouched: wrong level
+    }
+
+    #[test]
+    fn test_build_timer_defaults_to_utc_rfc3339() {
+        let timer = build_timer(false);
+        let mut buf = String::new();
+        let mut writer = fmt::format::Writer::new(&mut buf);
+        timer.format_time(&mut writer).unwrap();
+        // UtcTime::rfc_3339() always renders a zero UTC offset as "Z", regardless of the
+        // host machine's local timezone -- see `time`'s Rfc3339 formatter.
+        assert!(
+            buf.ends_with('Z'),
+            "expected an RFC3339 UTC timestamp, got {buf:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_timer_local_time_is_selectable_without_panicking() {
+        let timer = build_timer(true);
+        let mut buf = String::new();
+        let mut writer = fmt::format::Writer::new(&mut buf);
+        // `time`'s local-offset lookup can refuse to run in a multi-threaded process (a
+        // soundness guard, not a bug here) and return an error instead of a timestamp --
+        // this only proves the `true` path is wired up to a different timer and doesn't
+        // panic, not what the local offset actually is.
+        let _ = timer.format_time(&mut writer);
     }
 }

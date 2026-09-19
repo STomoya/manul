@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
+import queue
 import sys
 from typing import TYPE_CHECKING, Literal
 from unittest.mock import ANY
@@ -16,7 +18,7 @@ import pytest
 
 from manul._manul import _logger
 from manul.logger import _functions
-from manul.logger.handler import TracingHandler
+from manul.logger.handler import TracingHandler, TracingQueueHandler
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture, MockType
@@ -97,6 +99,17 @@ class TestBuildLayerConfig:
             sample_directive=expected_sample_directive,
         )
         assert config.sample_directive == expected_sample_directive
+
+    def test_use_local_time_defaults_to_utc(self) -> None:
+        """Test that use_local_time defaults to False (UTC) when omitted."""
+        config = _functions.build_layer_config(name='test', filter_directive='trace')
+        assert config.use_local_time is False
+
+    @pytest.mark.parametrize('use_local_time', [True, False])
+    def test_use_local_time_is_passed_through(self, use_local_time: bool) -> None:  # noqa: FBT001
+        """Test that an explicit use_local_time is passed through to the LayerConfig."""
+        config = _functions.build_layer_config(name='test', filter_directive='trace', use_local_time=use_local_time)
+        assert config.use_local_time == use_local_time
 
 
 class TestInitTracing:
@@ -276,6 +289,26 @@ class TestSpan:
         assert kwargs['message'] == 'job closed'
         assert isinstance(kwargs['extra']['duration_ms'], float)
 
+    def test_span_close_can_disable_the_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False suppresses the close event but still pops the span."""
+        assert _functions._current_spans_payload() is None
+        with _functions.span('req', log_close=False):
+            assert _functions._current_spans_payload() == [{'name': 'req', 'fields': {}}]
+
+        mock_log_sink.assert_not_called()
+        assert _functions._current_spans_payload() is None
+
+    def test_async_span_close_can_disable_the_timing_event(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False also suppresses the close event for `async with`."""
+
+        async def run() -> None:
+            async with _functions.span('job', log_close=False):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+
+        mock_log_sink.assert_not_called()
+
     def test_span_is_scoped_to_with_block(self) -> None:
         """Test that the span stack is empty before, populated during, and empty after."""
         assert _functions._current_spans_payload() is None
@@ -329,6 +362,82 @@ class TestSpan:
 
         assert results['first'] == [{'name': 'first', 'fields': {}}]
         assert results['second'] == [{'name': 'second', 'fields': {}}]
+
+
+class TestSpanDecorator:
+    """Tests for the span_decorator function."""
+
+    @pytest.fixture(autouse=True)
+    def mock_log_sink(self, mocker: MockerFixture) -> MockType:
+        """Mock the underlying `_logger._log_sink` pyo3 function."""
+        return mocker.patch.object(_logger, '_log_sink', autospec=True)
+
+    def test_sync_function_is_wrapped_in_a_span(self, mock_log_sink: MockType) -> None:
+        """Test that a sync function's whole body runs inside the named span."""
+        captured = {}
+
+        @_functions.span_decorator('db_query', table='users')
+        def run_query() -> str:
+            captured['spans'] = _functions._current_spans_payload()
+            return 'result'
+
+        assert _functions._current_spans_payload() is None
+        result = run_query()
+
+        assert result == 'result'
+        assert captured['spans'] == [{'name': 'db_query', 'fields': {'table': 'users'}}]
+        assert _functions._current_spans_payload() is None
+        mock_log_sink.assert_called_once()
+        assert mock_log_sink.call_args.kwargs['message'] == 'db_query closed'
+
+    def test_async_function_is_wrapped_in_a_span(self, mock_log_sink: MockType) -> None:
+        """Test that an async function's whole body runs inside the named span."""
+        captured = {}
+
+        @_functions.span_decorator('job')
+        async def run_job() -> str:
+            captured['spans'] = _functions._current_spans_payload()
+            await asyncio.sleep(0)
+            return 'done'
+
+        result = asyncio.run(run_job())
+
+        assert result == 'done'
+        assert captured['spans'] == [{'name': 'job', 'fields': {}}]
+        mock_log_sink.assert_called_once()
+
+    def test_defaults_name_to_qualname(self) -> None:
+        """Test that omitting name uses the wrapped function's __qualname__."""
+        captured = {}
+
+        @_functions.span_decorator()
+        def my_func() -> None:
+            captured['spans'] = _functions._current_spans_payload()
+
+        my_func()
+
+        assert captured['spans'] == [{'name': my_func.__qualname__, 'fields': {}}]
+
+    def test_log_close_can_be_disabled(self, mock_log_sink: MockType) -> None:
+        """Test that log_close=False suppresses the timing event for a decorated function."""
+
+        @_functions.span_decorator('quiet', log_close=False)
+        def run() -> None:
+            pass
+
+        run()
+
+        mock_log_sink.assert_not_called()
+
+    def test_preserves_function_metadata(self) -> None:
+        """Test that functools.wraps preserves the wrapped function's name and docstring."""
+
+        @_functions.span_decorator()
+        def documented() -> None:
+            """A docstring."""
+
+        assert documented.__name__ == 'documented'
+        assert documented.__doc__ == 'A docstring.'
 
 
 class TestTracingHandler:
@@ -450,3 +559,68 @@ class TestTracingHandler:
             exception=None,
         )
         mock_handle_error.assert_called_once_with(handler, mock_record)
+
+
+class TestTracingQueueHandler:
+    """Tests for the TracingQueueHandler class."""
+
+    def test_prepare_preserves_exc_info(self) -> None:
+        """Test that prepare() keeps exc_info intact, unlike the stdlib QueueHandler."""
+        error_message = 'boom'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            record = logging.LogRecord(
+                name='test_logger',
+                level=logging.ERROR,
+                pathname='test.py',
+                lineno=10,
+                msg='%s happened',
+                args=('it',),
+                exc_info=sys.exc_info(),
+            )
+
+        handler = TracingQueueHandler(queue.Queue())
+        prepared = handler.prepare(record)
+
+        assert prepared.exc_info == record.exc_info
+        assert prepared.args is None
+        assert prepared.message == 'it happened'
+        assert prepared.msg == 'it happened'
+        # prepare() copies the record rather than mutating it in place.
+        assert record.args == ('it',)
+
+    def test_end_to_end_preserves_structured_exception_through_the_queue(self, mocker: MockerFixture) -> None:
+        """Test that a QueueListener-routed record still gets a structured exception dict."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+
+        record_queue: queue.Queue = queue.Queue()
+        listener = logging.handlers.QueueListener(record_queue, TracingHandler())
+        listener.start()
+
+        logger = logging.getLogger('test_tracing_queue_handler')
+        logger.setLevel(logging.ERROR)
+        logger.addHandler(TracingQueueHandler(record_queue))
+        logger.propagate = False
+
+        error_message = 'boom'
+
+        def _raise() -> None:
+            raise ValueError(error_message)
+
+        try:
+            _raise()
+        except ValueError:
+            logger.exception('it happened')
+
+        listener.stop()
+
+        mock_log_sink.assert_called_once()
+        exception = mock_log_sink.call_args.kwargs['exception']
+        assert exception is not None
+        assert exception['type'] == 'ValueError'
+        assert exception['message'] == error_message

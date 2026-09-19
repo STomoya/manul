@@ -9,6 +9,7 @@ from manul.logger._functions import (
     log_sink,
     set_filter,
     span,
+    span_decorator,
     trace,
     warn,
 )

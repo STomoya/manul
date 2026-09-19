@@ -56,6 +56,9 @@ class LayerConfig:
     sample_directive: str | None
     """`"<span_name>:<level>:<n>"`: within `span_name`, keep 1 in every `n` events at `level`."""
 
+    use_local_time: bool
+    """Whether to timestamp logs in the local timezone instead of UTC. Defaults to False (UTC)."""
+
     def __init__(
         self,
         name: str,
@@ -67,6 +70,7 @@ class LayerConfig:
         include_span_events: bool = False,
         max_log_files: int | None = None,
         sample_directive: str | None = None,
+        use_local_time: bool = False,
     ) -> None:
         """Create a new LayerConfig.
 
@@ -84,6 +88,9 @@ class LayerConfig:
                 open, keep 1 in every `n` events at `level` on this layer and drop the rest. Events at
                 other levels, or outside that span, are unaffected. None disables sampling. Defaults to
                 None.
+            use_local_time (bool, optional): Timestamp logs in the local timezone instead of UTC. UTC is
+                the de-facto standard for application logs (no DST ambiguity, correlates cleanly across
+                services), so this defaults to False.
 
         """
 

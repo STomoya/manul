@@ -19,6 +19,7 @@ fn test_sample_directive_thins_events_within_the_named_span_only() {
         include_span_events: false,
         max_log_files: None,
         sample_directive: Some("db_query:debug:5".to_string()),
+        use_local_time: false,
     };
 
     let guard = init_tracing(vec![config]).expect("init_tracing should succeed");
