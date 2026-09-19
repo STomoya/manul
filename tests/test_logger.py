@@ -274,6 +274,15 @@ class TestSpan:
         assert kwargs['spans'] == [{'name': 'req', 'fields': {'request_id': 42}}]
         assert isinstance(kwargs['extra']['duration_ms'], float)
 
+    def test_span_pops_stack_even_if_close_event_dispatch_raises(self, mock_log_sink: MockType) -> None:
+        """Test that a failure logging the close event doesn't leak the span frame."""
+        mock_log_sink.side_effect = RuntimeError('boom')
+
+        with pytest.raises(RuntimeError, match='boom'), _functions.span('req'):
+            pass
+
+        assert _functions._current_spans_payload() is None
+
     def test_async_span_close_emits_debug_timing_event(self, mock_log_sink: MockType) -> None:
         """Test that the timing close event also fires for `async with`."""
 
@@ -482,6 +491,7 @@ class TestTracingHandler:
             module_name='test',
             extra={'extra_key': 'extra_value'},
             exception=None,
+            spans=None,
         )
 
     def test_no_extra(self, mocker: MockerFixture, mock_record: logging.LogRecord) -> None:
@@ -502,6 +512,7 @@ class TestTracingHandler:
             module_name='test',
             extra=None,
             exception=None,
+            spans=None,
         )
 
     def test_emit_with_exc_info_builds_exception_payload(
@@ -557,6 +568,7 @@ class TestTracingHandler:
             module_name='test',
             extra=None,
             exception=None,
+            spans=None,
         )
         mock_handle_error.assert_called_once_with(handler, mock_record)
 
@@ -593,6 +605,45 @@ class TestTracingQueueHandler:
         assert prepared.msg == 'it happened'
         # prepare() copies the record rather than mutating it in place.
         assert record.args == ('it',)
+
+    def test_prepare_snapshots_the_current_span_stack(self) -> None:
+        """Test that prepare() captures the calling thread's span stack onto the record."""
+        record = logging.LogRecord(
+            name='test_logger',
+            level=logging.INFO,
+            pathname='test.py',
+            lineno=10,
+            msg='hello',
+            args=None,
+            exc_info=None,
+        )
+        handler = TracingQueueHandler(queue.Queue())
+
+        with _functions.span('req', request_id=42):
+            prepared = handler.prepare(record)
+
+        assert prepared._spans == [{'name': 'req', 'fields': {'request_id': 42}}]  # ty: ignore[unresolved-attribute]
+
+    def test_end_to_end_preserves_spans_through_the_queue(self, mocker: MockerFixture) -> None:
+        """Test that a span opened on the calling thread survives the QueueListener hop."""
+        mock_log_sink = mocker.patch('manul.logger.handler.log_sink', autospec=True)
+
+        record_queue: queue.Queue = queue.Queue()
+        listener = logging.handlers.QueueListener(record_queue, TracingHandler())
+        listener.start()
+
+        logger = logging.getLogger('test_tracing_queue_handler_spans')
+        logger.setLevel(logging.INFO)
+        logger.addHandler(TracingQueueHandler(record_queue))
+        logger.propagate = False
+
+        with _functions.span('req', request_id=42):
+            logger.info('it happened')
+
+        listener.stop()
+
+        mock_log_sink.assert_called_once()
+        assert mock_log_sink.call_args.kwargs['spans'] == [{'name': 'req', 'fields': {'request_id': 42}}]
 
     def test_end_to_end_preserves_structured_exception_through_the_queue(self, mocker: MockerFixture) -> None:
         """Test that a QueueListener-routed record still gets a structured exception dict."""

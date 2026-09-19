@@ -6,9 +6,10 @@ import logging.handlers
 import traceback
 from logging import Handler
 
-from manul.logger._functions import log_sink
+from manul.logger._functions import _current_spans_payload, log_sink
 
 _STANDARD_ATTRS = {
+    '_spans',
     'args',
     'asctime',
     'created',
@@ -70,13 +71,14 @@ class TracingHandler(Handler):
                 module_name=record.module,
                 extra=extra_fields,
                 exception=exception,
+                spans=getattr(record, '_spans', None),
             )
         except Exception:
             self.handleError(record)
 
 
 class TracingQueueHandler(logging.handlers.QueueHandler):
-    """A `QueueHandler` that preserves `exc_info` across the queue hop.
+    """A `QueueHandler` that preserves `exc_info` and the span stack across the queue hop.
 
     Pairs with `TracingHandler` via a `logging.handlers.QueueListener` to move
     logging work off the calling thread. The stdlib `QueueHandler.prepare()`
@@ -86,12 +88,20 @@ class TracingQueueHandler(logging.handlers.QueueHandler):
     once the record reaches the listener thread. This subclass keeps
     `exc_info` intact instead, so only use it with an in-process `queue.Queue`,
     never a `multiprocessing.Queue`.
+
+    It also snapshots the calling thread/task's span stack onto the record, since
+    `_current_spans` is a `ContextVar` that wouldn't otherwise survive the hop to the
+    listener thread.
     """
 
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
-        """Merge `args` into the message, but leave `exc_info` for the listener's handler."""
+        """Merge `args` into the message, and snapshot spans, but leave `exc_info` for the listener's handler."""
         record = copy.copy(record)
         record.message = record.getMessage()
         record.msg = record.message
         record.args = None
+        # _current_spans is a ContextVar: it only exists on the calling thread, so it
+        # must be captured here rather than re-read once the record reaches the
+        # QueueListener thread, where it would evaluate to an empty stack.
+        record._spans = _current_spans_payload()
         return record

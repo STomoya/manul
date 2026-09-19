@@ -182,19 +182,21 @@ class SpanContext:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        if self._log_close:
-            duration_ms = (time.monotonic() - self._start) * 1000
-            filename, func_name, lineno, module_name = self._location
-            log_sink(
-                levelno=_LEVELS['debug'],
-                message=f'{self._frame.name} closed',
-                filename=filename,
-                func_name=func_name,
-                lineno=lineno,
-                module_name=module_name,
-                extra={'duration_ms': round(duration_ms, 3)},
-            )
-        _current_spans.reset(self._token)
+        try:
+            if self._log_close:
+                duration_ms = (time.monotonic() - self._start) * 1000
+                filename, func_name, lineno, module_name = self._location
+                log_sink(
+                    levelno=_LEVELS['debug'],
+                    message=f'{self._frame.name} closed',
+                    filename=filename,
+                    func_name=func_name,
+                    lineno=lineno,
+                    module_name=module_name,
+                    extra={'duration_ms': round(duration_ms, 3)},
+                )
+        finally:
+            _current_spans.reset(self._token)
 
     async def __aenter__(self) -> Self:
         return self.__enter__()
@@ -345,6 +347,7 @@ def log_sink(
     module_name: str,
     extra: dict | None = None,
     exception: dict | None = None,
+    spans: list[dict] | None = None,
 ) -> None:
     """Receive log messages from Python and forward them to Rust.
 
@@ -359,6 +362,11 @@ def log_sink(
         exception (dict | None, optional): `{type, message, traceback}` for the
             currently-handled exception, e.g. from `logging`'s `exc_info`. Defaults to
             None.
+        spans (list[dict] | None, optional): Pre-captured span stack, for callers (e.g.
+            `TracingQueueHandler`) dispatching on a different thread/task than the one
+            that made the log call, where `_current_spans_payload()` would read the
+            wrong context. None looks up the current thread/task's span stack.
+            Defaults to None.
 
     """
     _logger._log_sink(
@@ -369,6 +377,6 @@ def log_sink(
         lineno=lineno,
         module_name=module_name,
         extra=extra,
-        spans=_current_spans_payload(),
+        spans=spans if spans is not None else _current_spans_payload(),
         exception=exception,
     )

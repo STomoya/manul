@@ -336,8 +336,8 @@ impl Sampler {
 /// input, matching `EnvFilter::new`'s own panic-on-bad-syntax behavior for
 /// `filter_directive` -- this is programmer-set config, not user input.
 fn parse_sample_directive(directive: &str) -> (String, tracing::Level, usize) {
-    let parts: Vec<&str> = directive.splitn(3, ':').collect();
-    let [span_name, level, n] = parts[..] else {
+    let parts: Vec<&str> = directive.rsplitn(3, ':').collect();
+    let [n, level, span_name] = parts[..] else {
         panic!("Invalid sample directive \"{directive}\": expected \"<span_name>:<level>:<n>\"");
     };
     let level: tracing::Level = level.parse().unwrap_or_else(|_| {
@@ -462,8 +462,10 @@ pub fn set_filter(layer_name: &str, filter_directive: &str) -> Result<(), Filter
         .get(layer_name)
         .ok_or_else(|| FilterUpdateError(format!("Unknown layer: \"{layer_name}\"")))?;
 
+    let filter =
+        EnvFilter::try_new(filter_directive).map_err(|e| FilterUpdateError(e.to_string()))?;
     handle
-        .reload(EnvFilter::new(filter_directive))
+        .reload(filter)
         .map_err(|e| FilterUpdateError(e.to_string()))
 }
 
@@ -1192,6 +1194,14 @@ mod tests {
     fn test_parse_sample_directive_parses_valid_directive() {
         let (span_name, level, n) = parse_sample_directive("db_query:debug:20");
         assert_eq!(span_name, "db_query");
+        assert_eq!(level, tracing::Level::DEBUG);
+        assert_eq!(n, 20);
+    }
+
+    #[test]
+    fn test_parse_sample_directive_preserves_colons_in_span_name() {
+        let (span_name, level, n) = parse_sample_directive("db:query:debug:20");
+        assert_eq!(span_name, "db:query");
         assert_eq!(level, tracing::Level::DEBUG);
         assert_eq!(n, 20);
     }

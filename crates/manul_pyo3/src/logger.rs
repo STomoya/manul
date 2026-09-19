@@ -4,7 +4,7 @@ use manul_logger::logger::{
 };
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyDict, PyList, PyTuple};
 use std::str::FromStr;
 
 #[pymodule(name = "_logger")]
@@ -274,19 +274,23 @@ fn spans_to_string(spans: &Bound<'_, PyList>) -> String {
     spans
         .iter()
         .map(|frame| {
-            let frame = frame
-                .cast::<PyDict>()
-                .expect("span frame must be a dict, see _current_spans_payload");
-            let name: String = frame
-                .get_item("name")
-                .expect("span frame must have a 'name' key")
-                .expect("span frame must have a 'name' key")
-                .extract()
-                .expect("span frame 'name' must be a str");
-            let fields = frame
-                .get_item("fields")
-                .expect("span frame must have a 'fields' key")
-                .and_then(|f| f.cast_into::<PyDict>().ok());
+            let (name, fields) = match frame.cast::<PyDict>() {
+                Ok(dict) => {
+                    let name = dict
+                        .get_item("name")
+                        .ok()
+                        .flatten()
+                        .and_then(|n| n.extract::<String>().ok())
+                        .unwrap_or_else(|| "?".to_string());
+                    let fields = dict
+                        .get_item("fields")
+                        .ok()
+                        .flatten()
+                        .and_then(|f| f.cast_into::<PyDict>().ok());
+                    (name, fields)
+                }
+                Err(_) => (frame.to_string(), None),
+            };
             match fields {
                 Some(fields) if !fields.is_empty() => {
                     format!("{}{{{}}}", name, dict_to_string(&fields))
@@ -305,6 +309,8 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
         serde_json::Value::Bool(v)
     } else if let Ok(v) = value.extract::<i64>() {
         serde_json::Value::from(v)
+    } else if let Ok(v) = value.extract::<u64>() {
+        serde_json::Value::from(v)
     } else if let Ok(v) = value.extract::<f64>() {
         serde_json::Value::from(v)
     } else if let Ok(v) = value.extract::<String>() {
@@ -313,6 +319,8 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> serde_json::Value {
         serde_json::Value::Null
     } else if let Ok(list) = value.cast::<PyList>() {
         serde_json::Value::Array(list.iter().map(|item| py_to_json(&item)).collect())
+    } else if let Ok(tuple) = value.cast::<PyTuple>() {
+        serde_json::Value::Array(tuple.iter().map(|item| py_to_json(&item)).collect())
     } else if let Ok(dict) = value.cast::<PyDict>() {
         dict_to_json(dict)
     } else {
@@ -473,6 +481,20 @@ mod tests {
     }
 
     #[test]
+    fn test_dict_to_json_handles_tuples_and_large_unsigned_ints() {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("coords", (1i64, 2i64)).unwrap();
+            dict.set_item("big", u64::MAX).unwrap();
+
+            let value = dict_to_json(&dict);
+            assert_eq!(value["coords"], serde_json::json!([1, 2]));
+            assert_eq!(value["big"], serde_json::json!(u64::MAX));
+        });
+    }
+
+    #[test]
     fn test_init_tracing_wrapper_success() {
         Python::initialize();
         let config = PyLayerConfig::py_new(
@@ -517,6 +539,20 @@ mod tests {
 
             let spans = PyList::new(py, [without_fields, with_fields]).unwrap();
             assert_eq!(spans_to_string(&spans), "outer > request{request_id=42}");
+        });
+    }
+
+    #[test]
+    fn test_spans_to_string_does_not_panic_on_malformed_frames() {
+        Python::initialize();
+        Python::attach(|py| {
+            let missing_name = PyDict::new(py);
+            missing_name.set_item("fields", PyDict::new(py)).unwrap();
+
+            let not_a_dict = 42i64.into_pyobject(py).unwrap().into_any();
+
+            let spans = PyList::new(py, [missing_name.into_any(), not_a_dict]).unwrap();
+            assert_eq!(spans_to_string(&spans), "? > 42");
         });
     }
 
