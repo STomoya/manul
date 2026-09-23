@@ -1,6 +1,30 @@
 use aho_corasick::AhoCorasick;
-use regex::{Regex, RegexSet};
+use regex::Regex;
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
+
+/// Pattern cache shared by `match_any` and `extract_structured`: both recompile
+/// on every call otherwise, and compilation dominates their runtime for the
+/// short/low-match-count inputs these are typically used on.
+fn regex_cache() -> &'static RwLock<HashMap<String, Regex>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, Regex>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+// ponytail: unbounded cache, fine for a fixed set of caller-defined patterns;
+// switch to an LRU (e.g. `lru` crate) if callers ever compile patterns from
+// unbounded/user-controlled input.
+fn cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    if let Some(re) = regex_cache().read().unwrap().get(pattern) {
+        return Ok(re.clone());
+    }
+    let re = Regex::new(pattern)?;
+    regex_cache()
+        .write()
+        .unwrap()
+        .insert(pattern.to_string(), re.clone());
+    Ok(re)
+}
 
 /// Scans text and returns byte offset tuples (start, end) of every match.
 pub fn find_all_offsets(text: &str, pattern: &str) -> Result<Vec<(usize, usize)>, regex::Error> {
@@ -10,9 +34,18 @@ pub fn find_all_offsets(text: &str, pattern: &str) -> Result<Vec<(usize, usize)>
 }
 
 /// Matches a list of patterns and returns the indices of those that matched.
+///
+/// Checks each pattern individually (cached) rather than building a combined
+/// `RegexSet`: for a handful of patterns, `RegexSet`'s multi-pattern automaton
+/// loses to independent per-pattern search (see issue #14 discussion).
 pub fn match_any(text: &str, patterns: &[&str]) -> Result<Vec<usize>, regex::Error> {
-    let set = RegexSet::new(patterns)?;
-    let matches = set.matches(text).into_iter().collect();
+    let mut matches = Vec::new();
+    for (i, pattern) in patterns.iter().enumerate() {
+        let re = cached_regex(pattern)?;
+        if re.is_match(text) {
+            matches.push(i);
+        }
+    }
     Ok(matches)
 }
 
@@ -40,7 +73,7 @@ pub fn extract_structured(
     text: &str,
     pattern: &str,
 ) -> Result<Vec<HashMap<String, String>>, regex::Error> {
-    let re = Regex::new(pattern)?;
+    let re = cached_regex(pattern)?;
     let mut results = Vec::new();
 
     let capture_names: Vec<&str> = re.capture_names().flatten().collect();
@@ -87,6 +120,16 @@ mod tests {
     }
 
     #[test]
+    fn test_match_any_reused_pattern_across_calls() {
+        // second call must hit the cache and still produce correct results
+        assert_eq!(match_any("hello world", &["hello"]).unwrap(), vec![0]);
+        assert_eq!(
+            match_any("goodbye world", &["hello"]).unwrap(),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
     fn test_replace_many() {
         let result = replace_many("foo bar", &["foo", "bar"], &["baz", "qux"]).unwrap();
         assert_eq!(result, "baz qux");
@@ -126,5 +169,17 @@ mod tests {
     #[test]
     fn test_extract_structured_invalid_pattern() {
         assert!(extract_structured("text", "(unclosed").is_err());
+    }
+
+    #[test]
+    fn test_extract_structured_reused_pattern_across_calls() {
+        // second call must hit the cache and still produce correct results
+        let pattern = r"(?P<name>\w+):(?P<age>\d+)";
+        let first = extract_structured("John:25", pattern).unwrap();
+        assert_eq!(first[0].get("name").unwrap(), "John");
+
+        let second = extract_structured("Jane:31", pattern).unwrap();
+        assert_eq!(second[0].get("name").unwrap(), "Jane");
+        assert_eq!(second[0].get("age").unwrap(), "31");
     }
 }
