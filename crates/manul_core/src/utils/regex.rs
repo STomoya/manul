@@ -1,26 +1,26 @@
 use aho_corasick::AhoCorasick;
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
 /// Pattern cache shared by `match_any` and `extract_structured`: both recompile
 /// on every call otherwise, and compilation dominates their runtime for the
 /// short/low-match-count inputs these are typically used on.
-fn regex_cache() -> &'static Mutex<HashMap<String, Regex>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Regex>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn regex_cache() -> &'static RwLock<HashMap<String, Regex>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, Regex>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 // ponytail: unbounded cache, fine for a fixed set of caller-defined patterns;
 // switch to an LRU (e.g. `lru` crate) if callers ever compile patterns from
 // unbounded/user-controlled input.
 fn cached_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    if let Some(re) = regex_cache().lock().unwrap().get(pattern) {
+    if let Some(re) = regex_cache().read().unwrap().get(pattern) {
         return Ok(re.clone());
     }
     let re = Regex::new(pattern)?;
     regex_cache()
-        .lock()
+        .write()
         .unwrap()
         .insert(pattern.to_string(), re.clone());
     Ok(re)
